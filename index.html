@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>LE MIRAGE — Casino 3D</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎰</text></svg>" />
+<link rel="stylesheet" href="styles.css" />
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+<script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
+<script src="https://cdn.babylonjs.com/proceduralTexturesLibrary/babylonjs.proceduralTextures.min.js"></script>
+</head>
+<body>
+
+<canvas id="renderCanvas" touch-action="none"></canvas>
+
+<!-- ============ LOADER ============ -->
+<div id="loader">
+  <div class="logo">LE&nbsp;MIRAGE</div>
+  <div class="sub">CASINO &amp; LOUNGE</div>
+  <div class="barwrap"><div id="loadbar"></div></div>
+  <div id="loadtxt">Initialisation…</div>
+  <button id="startBtn" hidden>ENTRER DANS LE CASINO</button>
+  <div class="hint">
+    <b>ZQSD / WASD</b> se déplacer &nbsp;•&nbsp; <b>Souris</b> regarder &nbsp;•&nbsp; <b>Maj</b> courir<br/>
+    <b>E</b> interagir / s'asseoir &nbsp;•&nbsp; <b>Échap</b> se lever &nbsp;•&nbsp; <b>Molette</b> mise machine<br/>
+    À table&nbsp;: <b>clic-glissé</b> pour incliner le regard
+  </div>
+</div>
+
+<!-- ============ HUD ============ -->
+<div id="hud" hidden>
+  <div id="crosshair"></div>
+
+  <div id="wallet">
+    <div class="chipicon"></div>
+    <div><span id="cash">2 500</span> <small>€</small></div>
+  </div>
+
+  <div id="players" hidden></div>
+
+  <div id="prompt" hidden><kbd>E</kbd> <span id="promptTxt"></span></div>
+  <div id="toast"></div>
+
+  <div id="drinkFx"></div>
+
+  <!-- Blackjack panel -->
+  <div id="bj" hidden>
+    <div id="bjinfo">
+      <div class="row"><span class="lbl">CROUPIER</span><span id="dealerVal">—</span></div>
+      <div class="row"><span class="lbl">VOUS</span><span id="playerVal">—</span></div>
+      <div class="row"><span class="lbl">MISE</span><span id="betVal">0 €</span></div>
+    </div>
+    <div id="bjmsg"></div>
+    <div id="bjbet">
+      <div class="betlabel">MISER&nbsp;:</div>
+      <button class="chipbtn c5"   data-v="5">5</button>
+      <button class="chipbtn c25"  data-v="25">25</button>
+      <button class="chipbtn c100" data-v="100">100</button>
+      <button class="chipbtn c500" data-v="500">500</button>
+      <button id="clearBet" class="txtbtn">Retirer</button>
+    </div>
+    <div id="bjact" hidden>
+      <button id="hit"    class="mainbtn">TIRER</button>
+      <button id="stand"  class="mainbtn">RESTER</button>
+      <button id="double" class="mainbtn">DOUBLER</button>
+    </div>
+    <div id="leave">ÉCHAP — quitter la table</div>
+  </div>
+
+  <!-- Slot panel -->
+  <div id="slotui" hidden>
+    <div id="slotmsg">MACHINE À SOUS</div>
+    <div class="slotrow">
+      <button id="betdown" class="txtbtn">−</button>
+      <div>MISE <b id="slotbet">10</b> €</div>
+      <button id="betup" class="txtbtn">+</button>
+      <button id="spin" class="mainbtn">LANCER</button>
+    </div>
+    <div id="leave2">ÉCHAP — s'éloigner</div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

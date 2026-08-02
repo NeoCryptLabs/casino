@@ -1,0 +1,14 @@
+# dépendances
+node_modules/
+server/node_modules/
+
+# build Next
+server/.next/
+server/out/
+
+# système
+.DS_Store
+*.log
+
+# fichiers de travail temporaires
+_verify.html
