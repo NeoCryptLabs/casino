@@ -187,6 +187,14 @@ export class People {
     if (avatar) kits.push({ url: "assets/player.glb", container: avatar, male: true, avatar: true });
     else console.info("[casino] assets/player.glb absent : avatars sans animation");
 
+    // LA CHANTEUSE. Modèle dédié, riggé sur le MÊME squelette Mixamo que
+    // `player.glb` : elle hérite donc de ses clips `idle`/`walk`. Sans ce
+    // fichier, le concert retombe sur le modèle féminin de base, qui ne porte
+    // aucune animation — c'est ce qui la faisait glisser jusqu'au micro.
+    const singer = await tryLoad(scene, "assets/singer.glb");
+    if (singer) kits.push({ url: "assets/singer.glb", container: singer, male: false, singer: true });
+    else console.info("[casino] assets/singer.glb absent : chanteuse sans animation");
+
     for (const [role, file] of [["dealer", "assets/dealer.glb"], ["bar", "assets/barman.glb"]]) {
       const c = await tryLoad(scene, file);
       if (!c) console.info("[casino] " + file + " introuvable : mannequin de repli pour " + role);
@@ -238,14 +246,17 @@ export class People {
   spawn(pos, faceY, o = {}) {
     const scene = this.scene;
     // le personnel a son propre modèle ; les clients ne le portent jamais
-    const pool = o.avatar
-      ? this.kits.filter((k) => k.avatar)
-      : o.role
-        ? this.kits.filter((k) => k.staff === o.role)
-        : (o.sex === "m" && this.hasMale
-          ? this.kits.filter((k) => k.male && !k.staff && !k.avatar)
-          : this.kits.filter((k) => !k.staff && !k.avatar && (o.sex !== "f" || !k.male)));
-    const kit = pick(pool.length ? pool : this.kits.filter((k) => !k.staff && !k.avatar));
+    const extra = (k) => !k.staff && !k.avatar && !k.singer;
+    const pool = o.singer
+      ? this.kits.filter((k) => k.singer)
+      : o.avatar
+        ? this.kits.filter((k) => k.avatar)
+        : o.role
+          ? this.kits.filter((k) => k.staff === o.role)
+          : (o.sex === "m" && this.hasMale
+            ? this.kits.filter((k) => k.male && extra(k))
+            : this.kits.filter((k) => extra(k) && (o.sex !== "f" || !k.male)));
+    const kit = pick(pool.length ? pool : this.kits.filter(extra));
     const ent = kit.container.instantiateModelsToScene((n) => n, true, { doNotInstantiate: true });
     const model = ent.rootNodes[0];
 
@@ -263,7 +274,7 @@ export class People {
     // que les modèles générés sont des hommes bien plus larges d'épaules que le
     // modèle importé : 0,29 m contre 0,22 m mesurés en jeu, soit +35 %, ce qui
     // les faisait paraître hors gabarit à côté des clients.
-    const build = (kit.staff || kit.avatar) ? 0.86 : rnd(0.94, 1.07);
+    const build = (kit.staff || kit.avatar) ? 0.86 : kit.singer ? 1.0 : rnd(0.94, 1.07);
     model.scaling.x *= build; model.scaling.z *= build;
 
     const tint = pick(TINTS);
@@ -272,7 +283,7 @@ export class People {
       if (this.world.shadowGens[0]) this.world.shadowGens[0].addShadowCaster(m);
       // le personnel procédural est déjà habillé : ni recoloration d'uniforme
       // (elle est calibrée sur l'atlas du modèle importé) ni teinte aléatoire
-      if (kit.staff || kit.avatar) continue;
+      if (kit.staff || kit.avatar || kit.singer) continue;
       if (o.uniform && this.uniformMat) { m.material = this.uniformMat; continue; }
       const mat = m.material;
       if (!mat) continue;
@@ -456,6 +467,147 @@ class NPC {
         .add(new B.Vector3(0, 0.18 * S, 0)));
     }
     this._snapshot();
+  }
+
+  /**
+   * ATTEINTE À DEUX OS. L'épaule vise un COUDE calculé par la loi des cosinus,
+   * puis l'avant-bras vise la cible : la main arrive EXACTEMENT dessus.
+   *
+   * `_aim` seul ne suffisait pas ici — il ne fait que pointer un os, la main
+   * s'arrête donc à la longueur de l'avant-bras, où qu'ait été mise la cible.
+   * C'est sans conséquence pour une posture de croupier ; pour une main qui
+   * tient un micro, cinq centimètres d'erreur se voient.
+   *
+   * @param {"Left"|"Right"} side
+   * @param {BABYLON.Vector3} target point monde à saisir
+   */
+  _reach(side, target) {
+    const arm = this.node(side + "Arm");
+    const fore = this.node(side + "ForeArm");
+    const hand = this.node(side + "Hand");
+    if (!arm || !fore || !hand) return;
+    const S = arm.getAbsolutePosition();
+    const a = B.Vector3.Distance(S, fore.getAbsolutePosition());
+    const b = B.Vector3.Distance(fore.getAbsolutePosition(), hand.getAbsolutePosition());
+    if (a < 1e-4 || b < 1e-4) return;
+    const to = target.subtract(S);
+    const len = to.length();
+    if (len < 1e-4) return;
+    const dir = to.scale(1 / len);
+    // hors d'atteinte (ou pliée à fond) : on borne, le bras tendra vers la cible
+    const d = clamp(len, Math.abs(a - b) + 0.01, a + b - 0.01);
+    const ang = Math.acos(clamp((a * a + d * d - b * b) / (2 * a * d), -1, 1));
+
+    // Le coude part vers le bas et vers l'extérieur — c'est ce qui distingue un
+    // bras humain d'un bras de pantin. Le signe de la rotation dépend du repère
+    // de l'os : plutôt que de le deviner, on essaie les deux et on garde celui
+    // qui envoie le coude du bon côté.
+    const pole = this._rightAxis().scale(side === "Right" ? 0.6 : -0.6)
+      .add(new B.Vector3(0, -1, 0)).normalize();
+    let axis = B.Vector3.Cross(dir, pole);
+    if (axis.lengthSquared() < 1e-8) axis = B.Vector3.Cross(dir, B.Axis.Y);
+    axis.normalize();
+    let best = null, bestDot = -Infinity;
+    for (const sign of [1, -1]) {
+      const v = B.Vector3.Zero();
+      dir.rotateByQuaternionToRef(B.Quaternion.RotationAxis(axis, ang * sign), v);
+      const dot = B.Vector3.Dot(v, pole);
+      if (dot > bestDot) { bestDot = dot; best = v; }
+    }
+    this._aim(arm, fore, S.add(best.scale(a)));
+    this._aim(fore, hand, target);
+  }
+
+  /**
+   * Oriente la PAUME autour de l'axe de l'avant-bras.
+   *
+   * `_reach` ne contrôle que la direction du bras : le roulis du poignet reste
+   * celui du clip. Mesuré en jeu, l'axe des articulations (index →
+   * auriculaire) tombait à 95° de la verticale — main à plat. Les doigts se
+   * refermaient donc dans un plan vertical, À CÔTÉ du fût, jamais autour. Pour
+   * empoigner un pied de micro, cet axe doit être parallèle au fût.
+   *
+   * @param {BABYLON.Vector3} pole direction de l'objet tenu (verticale ici)
+   */
+  _orientPalm(side, pole) {
+    const fore = this.node(side + "ForeArm");
+    const hand = this.node(side + "Hand");
+    const idx = this.node(side + "HandIndex1");
+    const pky = this.node(side + "HandPinky1");
+    if (!fore || !hand || !idx || !pky) return;
+    const axis = hand.getAbsolutePosition().subtract(fore.getAbsolutePosition());
+    if (axis.lengthSquared() < 1e-9) return;
+    axis.normalize();
+    // on raisonne dans le plan perpendiculaire à l'avant-bras : c'est le seul
+    // degré de liberté disponible sans déplacer la main
+    const flat = (v) => v.subtract(axis.scale(B.Vector3.Dot(v, axis)));
+    const cur = flat(idx.getAbsolutePosition().subtract(pky.getAbsolutePosition()));
+    const want = flat(pole.clone());
+    if (cur.lengthSquared() < 1e-8 || want.lengthSquared() < 1e-8) return;
+    cur.normalize(); want.normalize();
+    let ang = Math.acos(clamp(B.Vector3.Dot(cur, want), -1, 1));
+    if (B.Vector3.Dot(B.Vector3.Cross(cur, want), axis) < 0) ang = -ang;
+    hand.rotate(axis, ang, B.Space.WORLD);
+    this._sync();
+  }
+
+  /**
+   * Referme les doigts sur ce que la main tient.
+   *
+   * Les phalanges tournent autour de l'AXE DES ARTICULATIONS (index →
+   * auriculaire) : c'est le seul qui plie une main sans la tordre. Le sens du
+   * pli dépend du repère des os du rig, qui n'est jamais garanti ; on l'essaie
+   * donc dans les deux sens une fois pour toutes, et on garde celui qui ramène
+   * le bout du doigt VERS LE POIGNET — la définition d'un poing.
+   */
+  _curl(side, amount) {
+    const hand = this.node(side + "Hand");
+    const idx = this.node(side + "HandIndex1");
+    const pky = this.node(side + "HandPinky1");
+    if (!hand || !idx || !pky) return;
+    const axis = idx.getAbsolutePosition().subtract(pky.getAbsolutePosition());
+    if (axis.lengthSquared() < 1e-9) return;
+    axis.normalize();
+
+    this._curlSign = this._curlSign || {};
+    if (this._curlSign[side] === undefined) {
+      const j = this.node(side + "HandIndex2"), tip = this.node(side + "HandIndex3");
+      let sign = 1;
+      if (j && tip) {
+        const H = hand.getAbsolutePosition().clone();
+        let bestD = Infinity;
+        for (const s of [1, -1]) {
+          j.rotate(axis, 0.6 * s, B.Space.WORLD); this._sync();
+          const d = B.Vector3.Distance(tip.getAbsolutePosition(), H);
+          j.rotate(axis, -0.6 * s, B.Space.WORLD); this._sync();
+          if (d < bestD) { bestD = d; sign = s; }
+        }
+      }
+      this._curlSign[side] = sign;
+    }
+    const s = this._curlSign[side] * amount;
+    // une phalange se plie plus que la précédente : c'est ce qui fait une main
+    // qui empoigne plutôt qu'une main qui salue
+    for (const f of ["HandIndex", "HandMiddle", "HandRing", "HandPinky"]) {
+      for (const [j, k] of [[1, 0.75], [2, 1.0], [3, 0.85]]) {
+        const nd = this.node(side + f + j);
+        if (nd) nd.rotate(axis, s * k, B.Space.WORLD);
+      }
+    }
+    const th = this.node(side + "HandThumb2");
+    if (th) th.rotate(axis, s * 0.5, B.Space.WORLD);
+    this._sync();
+  }
+
+  /**
+   * Fait tenir un objet : les cibles sont des points MONDE, réappliqués à
+   * chaque image par `_pose` — un clip d'animation écrase sinon la pose des
+   * bras à la frame suivante.
+   * @param {?{left?:BABYLON.Vector3, right?:BABYLON.Vector3, curl?:number}} grip
+   */
+  hold(grip) {
+    this._hold = grip || null;
+    this._holdFix = null;      // la correction paume/poignet se remesure
   }
 
   /** Axe « droite » du personnage, déduit de la position réelle des hanches. */
@@ -667,6 +819,36 @@ class NPC {
       apply(this.rArm, -k * 0.5, 0, 0);
       apply(this.rFore, -k * 0.7, 0, 0);
     }
+
+    // ---- objet tenu (micro) ----
+    // APRÈS tout le reste : la prise est une contrainte dure, elle ne se
+    // négocie pas avec la respiration du buste. `_sync` d'abord, sinon on
+    // calcule les positions d'os d'avant les offsets posés juste au-dessus.
+    if (this._hold) {
+      this._sync();
+      const fix = this._holdFix || (this._holdFix = {});
+      const c = this._hold.curl ?? 0.8;
+      for (const [side, key] of [["Right", "right"], ["Left", "left"]]) {
+        const target = this._hold[key];
+        if (!target) continue;
+        this._reach(side, fix[side] ? target.add(fix[side]) : target);
+        // L'os « Hand » est le POIGNET : viser la cible avec lui laisse la main
+        // dépasser de dix centimètres au-delà de l'objet — mesuré en jeu, c'est
+        // ce qui donnait des mains posées À CÔTÉ du micro. On mesure donc une
+        // fois l'écart entre la paume et la cible, et on décale la visée
+        // d'autant. La pose étant fixe au micro, la correction reste valable.
+        if (!fix[side]) {
+          const palm = this.node(side + "HandMiddle1");
+          fix[side] = palm ? target.subtract(palm.getAbsolutePosition()) : B.Vector3.Zero();
+          this._reach(side, target.add(fix[side]));
+        }
+        // paume tournée vers l'objet AVANT de refermer les doigts : refermer
+        // une main mal orientée la ferme à côté
+        if (this._hold.pole) this._orientPalm(side, this._hold.pole);
+        if (c > 0) this._curl(side, c);
+      }
+    }
+
   }
 
   /**

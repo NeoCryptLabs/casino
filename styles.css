@@ -16,12 +16,128 @@ html,body{width:100%;height:100%;overflow:hidden;background:#05050a;
 .barwrap{margin-top:44px;width:min(420px,70vw);height:2px;background:#3a2a12;overflow:hidden}
 #loadbar{width:0%;height:100%;background:linear-gradient(90deg,#ffcf5c,#fff3c9);box-shadow:0 0 14px #ffcf5c;transition:width .35s}
 #loadtxt{margin-top:14px;font-size:11px;letter-spacing:.3em;color:#7d6134;height:14px}
-#startBtn{margin-top:34px;padding:15px 46px;font:inherit;font-size:13px;letter-spacing:.32em;cursor:pointer;
-  color:#0c0803;background:linear-gradient(180deg,#ffe9a8,#d8a63c);border:0;border-radius:2px;
-  box-shadow:0 0 40px rgba(230,180,70,.35);transition:.25s}
-#startBtn:hover{transform:translateY(-2px);box-shadow:0 0 60px rgba(255,215,120,.65)}
-.hint{position:absolute;bottom:26px;text-align:center;font-size:11px;line-height:2;letter-spacing:.12em;color:#6b5228}
-.hint b{color:#c49a49}
+
+/* ---------- MENU : écran-titre & pause ---------- */
+/* Au titre, la scène 3D dérive derrière le voile ; en pause, le jeu reste
+   dessous, flouté. Un seul calque, deux ambiances. */
+#menu{position:fixed;inset:0;z-index:60;opacity:0;transition:opacity .32s ease;
+  display:grid;grid-template-rows:auto 1fr auto;
+  padding:clamp(26px,5vh,60px) clamp(28px,7vw,104px);
+  backdrop-filter:blur(2px)}
+#menu.on{opacity:1}
+#menu.paused{backdrop-filter:blur(13px) saturate(.75)}
+#menu::before{content:"";position:absolute;inset:0;
+  background:linear-gradient(100deg,rgba(5,3,1,.94) 0%,rgba(8,5,2,.84) 44%,rgba(6,4,2,.3) 100%),
+    radial-gradient(ellipse at 26% 52%,rgba(74,38,8,.55) 0%,transparent 68%)}
+#menu::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.5;
+  background:repeating-linear-gradient(180deg,rgba(255,225,160,.045) 0 1px,transparent 1px 3px);
+  mix-blend-mode:screen}
+#mnHead,#mnPage,#mnFoot{position:relative}
+#mnHead .logo{font-size:clamp(30px,5.4vw,62px)}
+#menu.paused #mnHead .logo{font-size:clamp(22px,3.6vw,42px)}
+#mnHead .sub{margin-top:.5em}
+#mnPage{align-self:center;width:100%;max-width:680px;padding:clamp(18px,4vh,42px) 0}
+#mnFoot{font-size:10px;letter-spacing:.24em;color:#6b5228}
+#mnFoot b{color:#c49a49}
+
+.mn-nav{display:flex;flex-direction:column;align-items:flex-start;gap:2px}
+.mn-item{display:flex;align-items:center;gap:16px;padding:11px 0;cursor:pointer;
+  font:inherit;font-size:clamp(15px,2vw,21px);letter-spacing:.3em;
+  background:none;border:0;color:#8d7440;transition:color .18s,transform .18s}
+.mn-item.on{color:#ffe9b6;transform:translateX(12px);text-shadow:0 0 24px rgba(255,190,80,.55)}
+.mn-mark{display:block;width:0;height:1px;flex:none;transition:width .18s;
+  background:linear-gradient(90deg,#ffd76a,rgba(255,215,106,0))}
+.mn-item.on .mn-mark{width:36px;box-shadow:0 0 10px rgba(255,200,90,.8)}
+.mn-item.mn-small{margin-top:18px;font-size:11px;letter-spacing:.26em}
+
+/* onglets des paramètres : ← → les fait défiler, ils sont le 1er élément */
+.mn-tabs{display:flex;gap:4px;margin-bottom:16px;padding-bottom:11px;
+  border-bottom:1px solid rgba(232,196,119,.18);border-radius:3px;transition:.18s}
+.mn-tabs.on{box-shadow:0 0 0 1px rgba(232,196,119,.35);background:rgba(255,200,90,.04)}
+.mn-tab{padding:6px 13px;font:inherit;font-size:10.5px;letter-spacing:.28em;cursor:pointer;
+  background:none;border:0;border-radius:3px;color:#7a6134;transition:.15s}
+.mn-tab:hover{color:#d8b25f}
+.mn-tab.sel{color:#160f04;background:linear-gradient(180deg,#ffe9a8,#d8a63c)}
+
+.mn-rows,.mn-doc{padding:16px 18px;border-radius:8px;
+  background:linear-gradient(180deg,rgba(26,19,8,.46),rgba(9,6,3,.56));
+  border:1px solid rgba(232,196,119,.2);box-shadow:inset 0 0 26px rgba(255,196,80,.04)}
+.mn-row{display:flex;align-items:center;justify-content:space-between;gap:22px;
+  padding:9px 12px;border:1px solid transparent;border-radius:4px;transition:.15s}
+.mn-row.on{background:rgba(255,200,90,.07);border-color:rgba(232,196,119,.3)}
+.mn-row .mn-lbl{display:flex;flex-direction:column;font-size:13.5px;letter-spacing:.13em;color:#bda067}
+.mn-row.on .mn-lbl{color:#ffe9b6}
+.mn-row .mn-mark{display:none}   /* dans une ligne, c'est le fond qui marque la sélection */
+.mn-lbl em{font-style:normal;font-size:9.5px;letter-spacing:.14em;color:#7a6134;margin-top:4px}
+.mn-val{display:flex;align-items:center;gap:11px}
+.mn-arw{width:20px;height:22px;padding:0;font:inherit;font-size:15px;line-height:1;cursor:pointer;
+  background:none;border:0;color:#8d7440;opacity:.25;transition:.15s}
+.mn-row.on .mn-arw{opacity:1;color:#ffd76a}
+.mn-arw:hover{transform:scale(1.3)}
+.mn-gauge{position:relative;width:clamp(90px,18vw,160px);height:3px;border-radius:2px;
+  cursor:ew-resize;touch-action:none;background:rgba(255,255,255,.12)}
+.mn-gauge i{position:relative;display:block;height:100%;border-radius:2px;
+  background:linear-gradient(90deg,#ffd76a,#ffb43c);
+  box-shadow:0 0 9px rgba(255,190,80,.6);transition:width .08s linear}
+/* poignée : elle marque où l'on tire, et grossit sur la ligne sélectionnée */
+.mn-gauge i::after{content:"";position:absolute;top:50%;right:0;width:7px;height:7px;
+  margin:-3.5px -3.5px 0 0;border-radius:50%;background:#ffe9b6;
+  box-shadow:0 0 10px rgba(255,200,90,.9);opacity:.35;transition:.15s}
+.mn-row.on .mn-gauge i::after{opacity:1;width:9px;height:9px;margin:-4.5px -4.5px 0 0}
+/* zone de saisie généreuse : la barre fait 3 px, la prise en fait 21 */
+.mn-gauge::after{content:"";position:absolute;inset:-9px 0}
+.mn-num{min-width:96px;text-align:right;font-size:11.5px;letter-spacing:.2em;color:#ffd76a;
+  font-variant-numeric:tabular-nums}
+.mn-row.off .mn-num{color:#6f5a30}
+
+/* LE NOM DU JOUEUR, à la porte : une ligne gravée, du même or que le reste.
+   Le champ ne s'annonce pas comme un formulaire — pas de cadre plein, juste un
+   filet sous le texte qui s'allume quand on écrit. `.ask` est le rappel joué
+   quand on essaie d'entrer sans nom : deux battements, sans un mot. */
+.mn-name{display:flex;align-items:center;gap:18px;max-width:440px;
+  margin-top:clamp(14px,3vh,26px);padding:10px 12px;
+  border:1px solid transparent;border-radius:4px;transition:.15s}
+.mn-name.on{background:rgba(255,200,90,.07);border-color:rgba(232,196,119,.3)}
+.mn-name .mn-lbl{font-size:12px;letter-spacing:.16em;color:#bda067;white-space:nowrap}
+.mn-name.on .mn-lbl{color:#ffe9b6}
+.mn-name .mn-mark{display:none}
+.mn-name input{flex:1;min-width:0;padding:4px 2px;font:inherit;font-size:14px;
+  letter-spacing:.14em;color:#ffe9b6;background:none;border:0;
+  border-bottom:1px solid rgba(232,196,119,.28);outline:none;transition:.15s}
+.mn-name input::placeholder{color:#6f5a30;letter-spacing:.1em}
+.mn-name input:focus{border-bottom-color:#ffd76a;
+  box-shadow:0 6px 14px -12px rgba(255,200,90,.9)}
+.mn-name.ask input{animation:nameAsk .5s ease 2}
+@keyframes nameAsk{
+  0%,100%{border-bottom-color:#ffd76a;transform:translateX(0)}
+  25%{border-bottom-color:#ff6a3c;transform:translateX(-4px)}
+  75%{border-bottom-color:#ff6a3c;transform:translateX(4px)}
+}
+
+/* Le choix d'ambiance, posé sous la navigation de l'écran-titre : discret,
+   moins large que les panneaux de réglages — c'est un fond, pas un menu. */
+.mn-amb{margin-top:clamp(16px,3.5vh,32px);max-width:440px;padding:8px 12px}
+.mn-amb .mn-row{padding:7px 10px;gap:14px}
+.mn-amb .mn-lbl{font-size:12px}
+.mn-amb .mn-gauge{width:clamp(70px,12vw,110px)}
+.mn-amb .mn-num{min-width:104px;font-size:11px}
+
+.mn-doc h3{font-weight:400;font-size:11px;letter-spacing:.42em;color:#e8c977;margin-bottom:16px}
+.mn-doc p{font-size:13px;line-height:1.95;letter-spacing:.07em;color:#bda067;margin-bottom:6px}
+.mn-doc p b{color:#e8c977}
+.mn-doc .dim{margin-top:14px;font-size:11px;color:#7a6134}
+.mn-key{display:flex;align-items:center;justify-content:space-between;gap:22px;padding:7px 2px;
+  font-size:12.5px;letter-spacing:.1em;color:#bda067;
+  border-bottom:1px dashed rgba(232,196,119,.12)}
+.mn-key:last-child{border-bottom:0}
+.mn-key kbd{margin:0;padding:3px 9px;font-size:11px;letter-spacing:.06em;white-space:nowrap}
+.mn-key kbd i{font-style:normal;opacity:.55}
+
+/* ---------- COMPTEUR D'IMAGES ---------- */
+#fps{position:absolute;right:26px;bottom:18px;font-size:11px;letter-spacing:.18em;color:#8d7440;
+  font-variant-numeric:tabular-nums;text-shadow:0 2px 8px #000}
+body.nocross #crosshair{display:none}
+body.menu-open #crosshair{opacity:0}
 
 /* ---------- HUD ---------- */
 #hud{position:fixed;inset:0;z-index:20;pointer-events:none}
@@ -54,6 +170,43 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 #toast.win{border-color:#ffd76a;color:#ffe9a8;box-shadow:0 0 44px rgba(255,200,80,.32)}
 #toast.lose{border-color:#a33;color:#ffb3ab}
+
+/* ---------- LE SALON (chat) ---------- */
+/* Bas-gauche : le portefeuille tient le haut-gauche, la barre de table le
+   centre, le compteur d'images le bas-droite. Le bloc grandit vers le HAUT,
+   la saisie reste donc toujours à la même hauteur sous les yeux. */
+#chat{position:absolute;left:26px;bottom:16px;width:min(380px,32vw);
+  display:flex;flex-direction:column;gap:6px;
+  font-size:12.5px;letter-spacing:.05em}
+#chatLog{display:flex;flex-direction:column;justify-content:flex-end;gap:2px;
+  max-height:32vh;overflow:hidden}
+.chatline{opacity:0;transform:translateY(5px);transition:opacity .3s,transform .3s;
+  padding:2px 4px;line-height:1.55;color:#e9dcb8;word-break:break-word;
+  text-shadow:0 2px 8px #000,0 0 3px #000}
+.chatline.in{opacity:1;transform:none}
+.chatline b{margin-right:7px;font-weight:400;color:#ffd76a}
+.chatline.me b{color:#7fd7a0}          /* soi-même : on se repère d'un coup d'œil */
+.chatline.sys{color:#9d7c3f;font-style:italic}
+/* Fondu au bout de FADE_MS, puis retrait de la mise en page — sinon les lignes
+   éteintes continueraient de pousser les vivantes hors du cadre. */
+.chatline.gone{opacity:0;transition:opacity .7s}
+#chat:not(.open) .chatline.hid{display:none}
+/* Saisie ouverte : tout l'historique revient, y compris ce qui s'était éteint. */
+#chat.open #chatLog{overflow-y:auto;padding:6px 6px 6px 4px;border-radius:6px;
+  background:linear-gradient(180deg,rgba(10,7,3,0),rgba(10,7,3,.55))}
+#chat.open .chatline{opacity:1;transform:none}
+#chatBar{display:flex;align-items:center;gap:8px;pointer-events:auto;
+  padding:7px 11px;border-radius:4px;
+  background:linear-gradient(180deg,rgba(24,18,8,.45),rgba(10,8,4,.66));
+  border:1px solid rgba(232,196,119,.42);backdrop-filter:blur(6px);
+  box-shadow:0 0 22px rgba(255,196,80,.12),inset 0 0 18px rgba(255,196,80,.04)}
+#chatBar .caret{color:#ffd76a;text-shadow:0 0 10px rgba(255,190,80,.8)}
+#chatIn{flex:1;min-width:0;font:inherit;font-size:13px;letter-spacing:.05em;
+  color:#fff3d4;background:none;border:0;outline:none;caret-color:#ffd76a;
+  user-select:text}
+#chatIn::placeholder{color:#6f5a30;letter-spacing:.12em}
+#chatHint{font-size:9.5px;letter-spacing:.24em;color:#6f5a30;text-shadow:0 2px 8px #000}
+#chatHint kbd{min-width:18px;margin-right:6px;padding:1px 5px;font-size:10px}
 
 #drinkFx{position:absolute;inset:0;opacity:0;transition:opacity 1.2s;pointer-events:none;
   background:radial-gradient(ellipse at 50% 50%,rgba(255,190,90,0) 40%,rgba(120,60,10,.5) 100%)}
@@ -95,3 +248,178 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
 #leave,#leave2{font-size:9px;letter-spacing:.22em;color:#7a5f2f}
 
 #slotmsg{font-size:13px;letter-spacing:.26em;color:#e8c977}
+
+/* ---------- LA CHALEUR ---------- */
+/* Le feu vit sous le HUD (z 20) et au-dessus de la scène : il enveloppe le
+   casino sans jamais intercepter un clic. */
+#fire{position:fixed;inset:0;z-index:15;pointer-events:none;
+  width:100%;height:100%;mix-blend-mode:screen}
+#heatTint{position:fixed;inset:0;z-index:14;pointer-events:none;opacity:0;
+  transition:opacity .5s linear;
+  background:
+    radial-gradient(ellipse at 50% 118%,rgba(255,116,20,.85) 0%,rgba(255,60,0,.32) 34%,transparent 62%),
+    radial-gradient(ellipse at 50% 50%,transparent 42%,rgba(190,40,0,.55) 100%)}
+
+/* Éclat doré du gain — l'inverse du feu : bref, net, sans traîne. */
+#goldFlash{position:fixed;inset:0;z-index:16;pointer-events:none;opacity:0;
+  background:radial-gradient(ellipse at 50% 60%,rgba(255,238,180,.55) 0%,rgba(255,196,80,.22) 38%,transparent 70%)}
+#goldFlash.on{animation:goldpop .62s ease-out}
+#goldFlash.on.big{animation:goldpop 1.1s ease-out}
+@keyframes goldpop{0%{opacity:0}12%{opacity:1}100%{opacity:0}}
+
+/* Badge multiplicateur : c'est le seul chiffre de tout le système — le reste
+   se lit dans les flammes. */
+/* à droite : le pendant du portefeuille, qui occupe déjà le coin gauche */
+#heatBadge{position:absolute;top:20px;right:26px;display:flex;align-items:baseline;gap:10px;
+  text-shadow:0 0 18px rgba(255,110,20,.9),0 2px 6px #000;
+  animation:heatin .45s cubic-bezier(.2,1.5,.4,1)}
+#heatMult{font-size:32px;font-weight:700;letter-spacing:.04em;
+  background:linear-gradient(180deg,#fff3c4,#ffab3c 55%,#ff5a10);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+#heatName{font-size:11px;letter-spacing:.34em;color:#ffb457}
+#heatBadge.t3 #heatMult,#heatBadge.t4 #heatMult{animation:heatpulse 1.1s ease-in-out infinite}
+#heatBadge.t4{animation:heatin .45s cubic-bezier(.2,1.5,.4,1),heatshake .12s linear infinite}
+#heatBadge.t4 #heatName{color:#fff0c0}
+@keyframes heatin{from{opacity:0;transform:translateY(8px) scale(.8)}to{opacity:1;transform:none}}
+@keyframes heatpulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.55)}}
+@keyframes heatshake{0%,100%{transform:translate(0,0)}25%{transform:translate(.6px,-.4px)}
+  50%{transform:translate(-.5px,.5px)}75%{transform:translate(.4px,.3px)}}
+
+/* ---------- MODE ÉDITEUR ---------- */
+#editHud{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);
+  text-align:center;pointer-events:none;
+  background:rgba(8,6,3,.78);border:1px solid rgba(232,196,119,.3);border-radius:4px;
+  padding:12px 22px;backdrop-filter:blur(6px)}
+#editSel{font-size:14px;letter-spacing:.12em;color:#ffd76a;margin-bottom:7px;
+  text-shadow:0 1px 6px #000}
+#editHud .keys{font-size:10.5px;letter-spacing:.1em;line-height:1.9;color:#8a6f3d}
+#editHud .keys b{color:#d8b25f}
+
+/* ---------- CHRONO DE TABLE ---------- */
+#bjcol{display:flex;flex-direction:column;align-items:center;gap:6px}
+#bjtimer{width:132px;height:3px;background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden}
+#bjtimerfill{height:100%;width:100%;background:linear-gradient(90deg,#ffd76a,#ffb43c);
+  box-shadow:0 0 8px rgba(255,190,80,.55)}
+#bjtimer.urgent #bjtimerfill{background:linear-gradient(90deg,#ff7a4a,#ff2e14);
+  box-shadow:0 0 10px rgba(255,70,20,.8)}
+#bjtimer.urgent{animation:tpulse .5s ease-in-out infinite}
+@keyframes tpulse{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.9)}}
+
+/* ---------- ASSURANCE & 21+3 ---------- */
+#bjins{display:flex;align-items:center;gap:10px}
+.inslbl{font-size:12px;letter-spacing:.1em;color:#ffd76a;white-space:nowrap;
+  animation:insblink 1s ease-in-out infinite}
+@keyframes insblink{0%,100%{opacity:1}50%{opacity:.55}}
+#side21 b:empty{display:none}
+#side21 b{color:#ffd76a;margin-left:4px}
+
+/* ---------- RÉPÉTER LA MISE & CAGNOTTE DE SÉRIE ---------- */
+/* Deux boutons qui n'existent QUE lorsqu'ils ont un sens : répéter n'a rien à
+   répéter sur un cercle déjà garni, et on n'encaisse pas une cagnotte vide.
+   Un bouton grisé en permanence n'apprendrait rien — celui-ci, en
+   apparaissant, enseigne la mécanique au moment où elle devient jouable. */
+/* deux boutons de plus dans la barre : sur une fenêtre étroite elle passe à
+   la ligne au lieu d'être rognée par l'overflow:hidden du panneau */
+#bjbet{flex-wrap:wrap;justify-content:center}
+#bjbet .txtbtn b{margin-left:5px}
+#rebet{color:#ffe9b0;border-color:rgba(255,215,120,.5);background:rgba(255,200,90,.10)}
+#rebet:hover{background:rgba(255,210,110,.22)}
+#rebet b{color:#ffd76a}
+/* la cagnotte est de la BRAISE, pas de l'or : ce n'est pas encore acquis */
+#bankPot{color:#ffd0a0;border-color:rgba(255,140,60,.55);background:rgba(255,110,30,.12);
+  text-shadow:0 0 9px rgba(255,120,40,.75);animation:potglow 1.9s ease-in-out infinite}
+#bankPot:hover{background:rgba(255,130,40,.26);animation:none}
+#bankPot b{color:#ffb066}
+@keyframes potglow{0%,100%{box-shadow:0 0 10px rgba(255,110,30,.18)}
+  50%{box-shadow:0 0 20px rgba(255,130,40,.45)}}
+
+/* ---------- RÉGLAGE CAMÉRA (P à table) ---------- */
+#camHud{position:absolute;left:50%;top:56px;transform:translateX(-50%);
+  text-align:center;pointer-events:none;
+  background:rgba(8,6,3,.78);border:1px solid rgba(232,196,119,.3);border-radius:4px;
+  padding:10px 20px;backdrop-filter:blur(6px)}
+#camVals{font-size:13px;letter-spacing:.1em;color:#ffd76a;margin-bottom:6px;
+  font-variant-numeric:tabular-nums;text-shadow:0 1px 6px #000}
+#camHud .keys{font-size:10.5px;letter-spacing:.08em;line-height:1.9;color:#8a6f3d}
+#camHud .keys b{color:#d8b25f}
+
+/* ---------- RAYONS DE VICTOIRE ---------- */
+/* Un éclat en étoile derrière le flash doré : des rais coniques qui tournent
+   d'un cran en s'éteignant. Portés par le ::before pour rejouer avec .on. */
+#goldFlash::before{content:"";position:absolute;inset:-25%;opacity:0;
+  background:repeating-conic-gradient(from 0deg at 50% 60%,
+    rgba(255,224,150,.30) 0deg 3deg, transparent 3deg 16deg);
+  -webkit-mask-image:radial-gradient(circle at 50% 60%, #000 0%, transparent 58%);
+  mask-image:radial-gradient(circle at 50% 60%, #000 0%, transparent 58%)}
+#goldFlash.on::before{animation:rays .8s ease-out}
+#goldFlash.on.big::before{animation:rays 1.35s ease-out}
+@keyframes rays{0%{opacity:0;transform:rotate(0deg) scale(.92)}
+  14%{opacity:1}100%{opacity:0;transform:rotate(11deg) scale(1.06)}}
+
+/* ---------- HUD DE TABLE EN RÉALITÉ AUGMENTÉE ---------- */
+/* Les infos (totaux, message, chrono, mise) sont projetées DANS la scène :
+   réticules sur le feutre, hologramme au-dessus de la table. Le DOM ne garde
+   que les commandes, restylées en console holographique translucide. */
+#bjinfo{display:none}
+#bjcol{display:none}
+
+#bj{background:linear-gradient(180deg,rgba(24,18,8,.30),rgba(10,8,4,.42));
+  border:1px solid rgba(232,196,119,.34);border-radius:8px;
+  box-shadow:0 0 24px rgba(255,196,80,.12), inset 0 0 22px rgba(255,196,80,.05);
+  backdrop-filter:blur(3px);position:absolute;overflow:hidden}
+#bj::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(180deg,rgba(255,225,160,.05) 0 1px,transparent 1px 3px);
+  mix-blend-mode:screen}
+#bj::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:8px;
+  border:1px solid rgba(255,230,170,.12);
+  animation:holo 3.2s ease-in-out infinite}
+@keyframes holo{0%,100%{opacity:.5}50%{opacity:1}}
+
+#bj .mainbtn,#bjfloat .mainbtn{color:#ffe9b0;background:rgba(255,200,90,.10);
+  border:1px solid rgba(255,215,120,.55);border-radius:4px;
+  text-shadow:0 0 10px rgba(255,190,80,.8);
+  box-shadow:0 0 12px rgba(255,196,80,.14), inset 0 0 10px rgba(255,196,80,.06)}
+#bj .mainbtn:hover,#bjfloat .mainbtn:hover{background:rgba(255,210,110,.22);filter:none;
+  box-shadow:0 0 20px rgba(255,205,100,.35)}
+#bj .mainbtn:disabled,#bjfloat .mainbtn:disabled{opacity:.22}
+#bj .txtbtn,#bjfloat .txtbtn{color:#e8cd8d;background:rgba(255,255,255,.04);
+  border:1px solid rgba(232,196,119,.35);
+  text-shadow:0 0 8px rgba(255,190,80,.5)}
+#bj .chipbtn{box-shadow:0 0 12px rgba(255,196,80,.25), inset 0 0 0 3px rgba(0,0,0,.35)}
+#bj .betlabel,#bj #leave{color:#b99757;text-shadow:0 0 8px rgba(255,190,80,.35)}
+
+/* Hors phase de mise, les jetons se GRISENT au lieu de disparaître : la barre
+   garde exactement la même géométrie de bout en bout de la main — le bloc
+   musique ne se déplace plus, aucun clic ne tombe sur un bouton déplacé. */
+#bjbet{transition:opacity .25s,filter .25s}
+#bjbet.off{opacity:.32;filter:saturate(.4);pointer-events:none}
+
+/* LA FENÊTRE DES DÉCISIONS : tirer/rester/… et l'assurance glissent dans un
+   panneau séparé AU-DESSUS de la barre. Même idiome holographique. */
+#bjfloat{position:absolute;left:50%;bottom:78px;transform:translateX(-50%);pointer-events:auto;
+  display:flex;align-items:center;gap:10px;padding:9px 16px;border-radius:8px;
+  background:linear-gradient(180deg,rgba(24,18,8,.30),rgba(10,8,4,.42));
+  border:1px solid rgba(232,196,119,.34);
+  box-shadow:0 0 24px rgba(255,196,80,.12), inset 0 0 22px rgba(255,196,80,.05);
+  backdrop-filter:blur(3px);overflow:hidden}
+#bjfloat::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(180deg,rgba(255,225,160,.05) 0 1px,transparent 1px 3px);
+  mix-blend-mode:screen}
+#bjfloat:not([hidden]){animation:floatin .24s ease-out}
+@keyframes floatin{from{opacity:0;transform:translate(-50%,12px)}to{opacity:1;transform:translate(-50%,0)}}
+#bjact,#bjins{display:flex;align-items:center;gap:10px}
+
+/* ambiance sonore + volume : le coin discret de la console, même idiome */
+#bjsound{display:flex;flex-direction:column;align-items:stretch;gap:5px;min-width:112px}
+.sndbtn{display:flex;align-items:center;justify-content:center;gap:7px;padding:6px 10px;cursor:pointer;
+  font:inherit;font-size:9.5px;letter-spacing:.2em;color:#e8cd8d;
+  background:rgba(255,255,255,.035);border:1px solid rgba(232,196,119,.3);border-radius:2px;transition:.15s}
+.sndbtn i{font-style:normal;color:#ffd76a;font-size:12px;text-shadow:0 0 8px rgba(255,190,80,.7)}
+.sndbtn:hover{background:rgba(255,210,110,.13);color:#ffe9b0}
+#volCtl{display:flex;align-items:center;gap:8px}
+.volbtn{width:20px;height:20px;padding:0;font:inherit;font-size:13px;line-height:1;cursor:pointer;
+  color:#d8b25f;background:none;border:1px solid rgba(232,196,119,.25);border-radius:2px;transition:.15s}
+.volbtn:hover{color:#ffe9b0;background:rgba(255,210,110,.12)}
+#volTrack{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.13);overflow:hidden}
+#volFill{display:block;height:100%;width:40%;background:linear-gradient(90deg,#ffd76a,#ffb43c);
+  box-shadow:0 0 8px rgba(255,190,80,.6);transition:width .12s}

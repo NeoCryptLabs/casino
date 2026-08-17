@@ -15,18 +15,32 @@
 
 <canvas id="renderCanvas" touch-action="none"></canvas>
 
+<!-- ============ CHALEUR ============
+     Calques posés ENTRE la scène 3D et le HUD : le feu doit lécher l'image du
+     casino, mais jamais recouvrir les boutons de mise. -->
+<div id="heatTint"></div>
+<canvas id="fire"></canvas>
+<div id="goldFlash"></div>
+
 <!-- ============ LOADER ============ -->
 <div id="loader">
   <div class="logo">LE&nbsp;MIRAGE</div>
   <div class="sub">CASINO &amp; LOUNGE</div>
   <div class="barwrap"><div id="loadbar"></div></div>
   <div id="loadtxt">Initialisation…</div>
-  <button id="startBtn" hidden>ENTRER DANS LE CASINO</button>
-  <div class="hint">
-    <b>ZQSD / WASD</b> se déplacer &nbsp;•&nbsp; <b>Souris</b> regarder &nbsp;•&nbsp; <b>Maj</b> courir<br/>
-    <b>E</b> interagir / s'asseoir &nbsp;•&nbsp; <b>Échap</b> se lever &nbsp;•&nbsp; <b>Molette</b> mise machine<br/>
-    À table&nbsp;: <b>clic-glissé</b> pour incliner le regard
+</div>
+
+<!-- ============ MENU (écran-titre + pause) ============
+     Le même calque sert les deux : au titre la caméra dérive au-dessus du
+     casino, en pause le jeu reste dessous, flouté. Les pages sont engendrées
+     par src/menu.js — les réglages, eux, viennent de src/settings.js. -->
+<div id="menu" hidden>
+  <div id="mnHead">
+    <div class="logo">LE&nbsp;MIRAGE</div>
+    <div class="sub" id="mnSub">CASINO &amp; LOUNGE</div>
   </div>
+  <div id="mnPage"></div>
+  <div id="mnFoot"></div>
 </div>
 
 <!-- ============ HUD ============ -->
@@ -40,8 +54,42 @@
 
   <div id="players" hidden></div>
 
+  <div id="fps" hidden>— FPS</div>
+
+  <div id="heatBadge" hidden>
+    <div id="heatMult">×1</div>
+    <div id="heatName"></div>
+  </div>
+
+  <!-- Mode éditeur (F2) -->
+  <div id="editHud" hidden>
+    <div id="editSel">rien de sélectionné</div>
+    <div class="keys">
+      <b>clic</b> sélectionner &nbsp;•&nbsp; <b>1/2/3</b> déplacer / tourner / taille &nbsp;•&nbsp;
+      <b>Ctrl+D</b> dupliquer &nbsp;•&nbsp; <b>Suppr</b> supprimer (copie) &nbsp;•&nbsp; <b>H</b> cacher<br/>
+      <b>ZQSD + Espace/C</b> voler &nbsp;•&nbsp; <b>V</b> vue scindée &nbsp;•&nbsp; <b>B</b> collisions &nbsp;•&nbsp;
+      <b>I</b> Inspector Babylon &nbsp;•&nbsp; <b>Ctrl+S</b> sauvegarder &nbsp;•&nbsp; <b>P</b> quitter<br/>
+      <b>K</b> caméras de table &nbsp;•&nbsp; <b>sphère cyan</b> visée &nbsp;•&nbsp; <b>molette</b> focale &nbsp;•&nbsp;
+      <b>G</b> cadrer depuis ce point de vue
+    </div>
+  </div>
+
   <div id="prompt" hidden><kbd>E</kbd> <span id="promptTxt"></span></div>
   <div id="toast"></div>
+
+  <!-- ============ SALON ============
+       Coin bas-gauche, toujours là : les dernières phrases s'effacent seules,
+       ⏎ ouvre la saisie. Le champ est le SEUL élément cliquable du bloc — le
+       reste laisse passer la souris comme tout le HUD. -->
+  <div id="chat">
+    <div id="chatLog"></div>
+    <div id="chatBar" hidden>
+      <span class="caret">&gt;</span>
+      <input id="chatIn" type="text" maxlength="200" autocomplete="off"
+             spellcheck="false" placeholder="dire quelque chose…" />
+    </div>
+    <div id="chatHint"><kbd>⏎</kbd> parler</div>
+  </div>
 
   <div id="drinkFx"></div>
 
@@ -52,21 +100,50 @@
       <div class="row"><span class="lbl">VOUS</span><span id="playerVal">—</span></div>
       <div class="row"><span class="lbl">MISE</span><span id="betVal">0 €</span></div>
     </div>
-    <div id="bjmsg"></div>
+    <div id="bjcol">
+      <div id="bjmsg"></div>
+      <div id="bjtimer" hidden><div id="bjtimerfill"></div></div>
+    </div>
     <div id="bjbet">
       <div class="betlabel">MISER&nbsp;:</div>
       <button class="chipbtn c5"   data-v="5">5</button>
       <button class="chipbtn c25"  data-v="25">25</button>
       <button class="chipbtn c100" data-v="100">100</button>
       <button class="chipbtn c500" data-v="500">500</button>
+      <button id="side21" class="txtbtn" title="Vos 2 cartes + la carte visible du croupier : brelan 30:1, suite 10:1, couleur 5:1… Un brelan assorti emporte le JACKPOT DU PIT.">21+3 <b id="sideval"></b></button>
       <button id="clearBet" class="txtbtn">Retirer</button>
+      <!-- Les deux boutons qui vont et viennent sont en BOUT de barre : rien
+           de ce qui précède ne bouge quand ils apparaissent, aucun clic ne
+           tombe sur un bouton qui vient de se déplacer. -->
+      <button id="rebet" class="txtbtn" hidden title="Reposer la mise du coup précédent (R ou Espace)">RÉPÉTER <b id="rebetval"></b></button>
+      <button id="bankPot" class="txtbtn" hidden title="Encaisser la cagnotte de série (C) — elle est acquise, mais la série repart de zéro">ENCAISSER <b id="bankval"></b></button>
     </div>
+    <div id="bjsound">
+      <button id="ambBtn" class="sndbtn" title="Changer d'ambiance sonore"><i>♪</i><b id="ambName">—</b></button>
+      <div id="volCtl" title="Volume de l'ambiance">
+        <button id="volDown" class="volbtn">−</button>
+        <div id="volTrack"><i id="volFill"></i></div>
+        <button id="volUp" class="volbtn">+</button>
+      </div>
+    </div>
+    <div id="leave"><b>MAJ + souris</b> — regarder autour &nbsp;•&nbsp; ÉCHAP — quitter la table</div>
+  </div>
+
+  <!-- Les DÉCISIONS (tirer/rester…, assurance) vivent dans une fenêtre
+       SÉPARÉE qui glisse au-dessus de la barre : la barre ne change jamais de
+       géométrie entre les phases, aucun bouton n'apparaît sous le curseur. -->
+  <div id="bjfloat" hidden>
     <div id="bjact" hidden>
       <button id="hit"    class="mainbtn">TIRER</button>
       <button id="stand"  class="mainbtn">RESTER</button>
       <button id="double" class="mainbtn">DOUBLER</button>
+      <button id="split"  class="mainbtn" hidden>SÉPARER</button>
     </div>
-    <div id="leave">ÉCHAP — quitter la table</div>
+    <div id="bjins" hidden>
+      <span class="inslbl">Le croupier montre un AS — assurance&nbsp;(<b id="insCost"></b>&nbsp;€)&nbsp;?</span>
+      <button id="insYes" class="mainbtn">OUI</button>
+      <button id="insNo"  class="txtbtn">NON</button>
+    </div>
   </div>
 
   <!-- Slot panel -->
@@ -78,7 +155,7 @@
       <button id="betup" class="txtbtn">+</button>
       <button id="spin" class="mainbtn">LANCER</button>
     </div>
-    <div id="leave2">ÉCHAP — s'éloigner</div>
+    <div id="leave2"><b>MAJ + souris</b> — regarder autour &nbsp;•&nbsp; ÉCHAP — s'éloigner</div>
   </div>
 </div>
 

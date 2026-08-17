@@ -143,6 +143,71 @@ function buildAtlas(scene) {
   });
 }
 
+/* ------------------------------------------------------------- combustion */
+
+/**
+ * Shader de dissolution. Le front de combustion n'est pas un simple seuil sur
+ * un bruit : on y mélange un gradient directionnel, sinon la carte se troue de
+ * partout à la fois comme un fromage au lieu de brûler DEPUIS un coin.
+ *
+ * Trois zones se lisent simultanément derrière le front : le papier intact, la
+ * bande carbonisée qui le précède, et le liseré incandescent. Les valeurs du
+ * liseré dépassent volontairement 1.0 — c'est le bloom du pipeline (seuil 0.88)
+ * qui s'en empare et fait rayonner la braise, sans calque de glow dédié.
+ */
+const BURN = "cardBurn";
+B.Effect.ShadersStore[BURN + "VertexShader"] = `
+precision highp float;
+attribute vec3 position;
+attribute vec2 uv;
+uniform mat4 worldViewProjection;
+uniform vec2 cardSize;
+varying vec2 vUV;
+varying vec2 vLoc;
+void main(void) {
+  vUV = uv;
+  // coordonnée LOCALE normalisée : le bruit doit être à l'échelle de la carte,
+  // pas de son minuscule rectangle dans l'atlas
+  vLoc = position.xz / cardSize + 0.5;
+  gl_Position = worldViewProjection * vec4(position, 1.0);
+}`;
+B.Effect.ShadersStore[BURN + "FragmentShader"] = `
+precision highp float;
+varying vec2 vUV;
+varying vec2 vLoc;
+uniform sampler2D atlas;
+uniform float t;
+uniform vec2 seed;
+uniform vec2 dir;
+
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm(vec2 p){
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++) { v += a * noise(p); p *= 2.13; a *= 0.5; }
+  return v;
+}
+
+void main(void) {
+  float n = fbm(vLoc * 4.5 + seed);
+  float g = dot(vLoc - 0.5, dir) + 0.5;
+  float m = n * 0.58 + g * 0.42;
+  float d = m - t;                 // > 0 : pas encore consumé
+  if (d < 0.0) discard;
+
+  vec3 col = texture2D(atlas, vUV).rgb;
+  col *= mix(0.04, 1.0, smoothstep(0.0, 0.26, d));      // carbonisation
+  float rim = 1.0 - smoothstep(0.0, 0.085, d);          // braise vive
+  col += rim * vec3(2.6, 0.80, 0.10);
+  col += pow(rim, 5.0) * vec3(1.8, 1.6, 1.0);           // cœur blanc
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
 /* ------------------------------------------------------------------ mesh */
 
 const GX = 7, GZ = 11; // subdivisions (déformation organique)
@@ -181,11 +246,87 @@ export class Cards {
   constructor(scene, audio, world) {
     this.scene = scene; this.audio = audio; this.world = world;
     const atlas = buildAtlas(scene);
+    this.atlas = atlas;
     this.mat = pbr("cardM", scene, { color: C3(0.70, 0.69, 0.66), roughness: 0.68, metallic: 0 });
     this.mat.baseTexture = atlas;
     this.mat.backFaceCulling = false;
     this.live = [];
     this.COLS = 14; this.ROWS = 4;
+    this._burnMat = null;
+    this._ash = null;
+  }
+
+  /**
+   * Atténuation par distance à la caméra : trois tables jouent en continu,
+   * seule la proche doit s'entendre — le cliquetis permanent des tables
+   * lointaines était insupportable.
+   */
+  vol(pos) {
+    const cam = this.scene.activeCamera;
+    if (!cam || !pos) return 1;
+    const d = B.Vector3.Distance(pos, cam.position);
+    // Portée resserrée : plein volume à sa PROPRE table (2 m), éteint à 5,5 m.
+    // L'ancienne courbe (plateau 3,5 m, extinction à 12,5 m) laissait les trois
+    // tables du pit s'entendre entre elles — la donne des voisines par-dessus
+    // la sienne. Le carré accentue la chute dès qu'on s'écarte du tapis.
+    return d < 2 ? 1 : Math.max(0, 1 - (d - 2) / 3.5) ** 2;
+  }
+
+  /**
+   * Matériau de combustion, cloné par carte : les uniformes (avancement,
+   * graine, direction) sont propres à chaque carte. Le clonage est bon marché,
+   * l'effet GLSL lui-même n'étant compilé qu'une fois pour toutes.
+   */
+  burnMaterial() {
+    if (!this._burnMat) {
+      this._burnMat = new B.ShaderMaterial("cardBurn", this.scene,
+        { vertex: BURN, fragment: BURN },
+        {
+          attributes: ["position", "uv"],
+          uniforms: ["worldViewProjection", "t", "seed", "dir", "cardSize"],
+          samplers: ["atlas"],
+        });
+      this._burnMat.setTexture("atlas", this.atlas);
+      this._burnMat.setVector2("cardSize", new B.Vector2(CARD_W, CARD_L));
+      this._burnMat.backFaceCulling = false;
+    }
+    const m = this._burnMat.clone("burn" + Math.random().toString(36).slice(2, 7));
+    m.setTexture("atlas", this.atlas);
+    m.setVector2("cardSize", new B.Vector2(CARD_W, CARD_L));
+    m.backFaceCulling = false;
+    return m;
+  }
+
+  /** Braises arrachées au front de combustion, aspirées vers le haut. */
+  ashBurst(pos, count = 26) {
+    if (!this._ash) {
+      const tex = canvasTex("ash", this.scene, 32, 32, (c, w, h) => {
+        const g = c.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
+        g.addColorStop(0, "rgba(255,235,190,1)");
+        g.addColorStop(0.4, "rgba(255,130,30,.8)");
+        g.addColorStop(1, "rgba(120,30,0,0)");
+        c.fillStyle = g; c.fillRect(0, 0, w, h);
+      });
+      const ps = new B.ParticleSystem("ash", 900, this.scene);
+      ps.particleTexture = tex;
+      ps.emitter = V3(0, 0, 0);
+      ps.createSphereEmitter(0.028, 0);
+      ps.minSize = 0.0025; ps.maxSize = 0.011;
+      ps.minLifeTime = 0.7; ps.maxLifeTime = 2.0;
+      ps.minEmitPower = 0.05; ps.maxEmitPower = 0.22;
+      ps.gravity = V3(0, 0.16, 0);
+      ps.direction1 = V3(-0.35, 0.8, -0.35);
+      ps.direction2 = V3(0.35, 1.2, 0.35);
+      ps.color1 = new B.Color4(1, 0.72, 0.28, 1);
+      ps.color2 = new B.Color4(1, 0.30, 0.03, 1);
+      ps.colorDead = new B.Color4(0.22, 0.06, 0.02, 0);
+      ps.blendMode = B.ParticleSystem.BLENDMODE_ADD;
+      ps.emitRate = 0;
+      ps.start();
+      this._ash = ps;
+    }
+    this._ash.emitter = pos.clone();
+    this._ash.manualEmitCount = count;
   }
 
   /**
@@ -235,13 +376,10 @@ export class Cards {
     }, scene);
     agg.body.setLinearDamping(1.4);   // les cartes planent / freinent dans l'air
     agg.body.setAngularDamping(1.8);
-    agg.body.setCollisionCallbackEnabled(true);
-    let last = 0;
-    agg.body.getCollisionObservable().add(() => {
-      const now = performance.now();
-      if (now - last > 90) { last = now; this.audio.card(); }
-    });
-
+    // Pas de son sur les collisions. `card_deal.mp3` contient DÉJÀ les deux
+    // temps — le glissé en l'air puis le claquement mat sur le feutre — et il
+    // est joué au lancer (Card.deal). Le rejouer à l'impact faisait deux sons
+    // par carte, dont un en retard : c'est ça qui empâtait la donne.
     const card = new Card(this, body, vis, agg, rank, suit);
     card.faceUp = faceUp;
     this.live.push(card);
@@ -319,7 +457,7 @@ export class Card {
     const T = clamp(dist * 0.55, 0.3, 0.85) / speed;
     b.setLinearVelocity(V3(d.x / T, 1.35 + d.y / T, d.z / T));
     b.setAngularVelocity(V3(rnd(-1.5, 1.5), rnd(6, 13) * (Math.random() < 0.5 ? -1 : 1), rnd(-1.5, 1.5)));
-    this.mgr.audio.card();
+    this.mgr.audio.card(this.mgr.vol(p));
     return T;
   }
 
@@ -343,7 +481,7 @@ export class Card {
     if (this.faceUp === faceUp) return;
     const scene = this.mgr.scene;
     this._animated();
-    this.mgr.audio.cardFlip();
+    this.mgr.audio.cardFlip(this.mgr.vol(this.body.position));
     const y0 = this.body.position.y;
     animFloat(scene, this.body, "position.y", y0, y0 + 0.022, frames * 0.45, true, () =>
       animFloat(scene, this.body, "position.y", y0 + 0.022, y0, frames * 0.55));
@@ -361,8 +499,71 @@ export class Card {
     });
   }
 
+  /**
+   * La carte se consume et disparaît. Utilisé sur une main perdue : c'est la
+   * sanction rendue visible, symétrique de l'or d'un gain.
+   *
+   * La carte quitte la physique (une carte qui brûle ne doit plus glisser sur
+   * le feutre), se cambre en gondolant comme du vrai papier qui chauffe, et
+   * sème des braises à mesure que le front avance.
+   *
+   * @param {{delay?:number, dur?:number, onEnd?:Function}} o
+   */
+  burn({ delay = 0, dur = 1.25, onEnd } = {}) {
+    if (this._burning || this.body.isDisposed()) return;
+    this._burning = true;
+    const scene = this.mgr.scene;
+
+    setTimeout(() => {
+      if (this.body.isDisposed()) return;
+      this._animated();
+      this.mgr.audio.burn?.(this.mgr.vol(this.body.position));
+
+      const mat = this.mgr.burnMaterial();
+      const ang = rnd(0, Math.PI * 2);
+      mat.setVector2("seed", new B.Vector2(rnd(0, 40), rnd(0, 40)));
+      // la combustion part d'un bord au hasard : deux cartes voisines ne
+      // doivent pas brûler à l'identique
+      mat.setVector2("dir", new B.Vector2(Math.cos(ang), Math.sin(ang)));
+      this.vis.material = mat;
+      this._burnMat = mat;
+
+      // twist0 est capturé AVANT la boucle : `setBend` réécrit `this.twist` à
+      // chaque frame, donc repartir de `this.twist` le ferait s'accumuler et la
+      // carte se viderait en tire-bouchon en une seconde.
+      const bend0 = this.bendAmt, twist0 = this.twist;
+      let e = 0, lastAsh = 0;
+      const obs = scene.onBeforeRenderObservable.add(() => {
+        e += scene.getEngine().getDeltaTime() / 1000;
+        const k = Math.min(1, e / dur);
+        // -0.05 pour que la carte soit intacte à l'amorce, 1.05 pour qu'il ne
+        // reste rien à la fin (le bruit dépasse légèrement [0,1])
+        mat.setFloat("t", -0.05 + k * 1.10);
+        // le papier gondole en chauffant, de plus en plus fort
+        this.setBend(bend0 + k * 0.016, this.twist + k * 0.004, 0.0022 * k);
+        this._t += scene.getEngine().getDeltaTime() / 1000;
+        this.body.position.y += 0.00016 * k;      // la chaleur soulève la carte
+        this.body.rotation.y += 0.0022 * k;
+
+        if (e - lastAsh > 0.06 && k < 0.95) {
+          lastAsh = e;
+          this.mgr.ashBurst(this.body.getAbsolutePosition(), 3 + Math.round(k * 6));
+        }
+        if (k >= 1) {
+          scene.onBeforeRenderObservable.remove(obs);
+          this.mgr.ashBurst(this.body.getAbsolutePosition(), 14);
+          this.dispose();
+          onEnd?.();
+        }
+      });
+    }, delay);
+  }
+
   dispose() {
     try { this.agg.dispose(); } catch (e) { }
+    // le matériau de combustion est un clone par carte : sans ça, une main
+    // perdue laisse un ShaderMaterial orphelin par carte, à chaque coup
+    if (this._burnMat) { try { this._burnMat.dispose(); } catch (e) { } this._burnMat = null; }
     this.vis.dispose(); this.body.dispose();
     const i = this.mgr.live.indexOf(this);
     if (i >= 0) this.mgr.live.splice(i, 1);

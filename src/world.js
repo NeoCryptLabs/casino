@@ -6,8 +6,19 @@ export const LAYOUT = {
   hall: { w: 44, d: 34, h: 8.5 },
   fountain: V3(0, 0, -1),
   bar: { x: 0, z: -14.2, w: 13 },
+  // le « pit » : trois tables de blackjack alignées le long du mur +X
   blackjack: V3(12.5, 0, 6),
+  blackjack1: V3(12.5, 0, -1.5),
+  blackjack2: V3(12.5, 0, -9),
+  stage: V3(21.72, 0, 0.5),   // SOUDÉE au mur +X : la baie est ouverte autour
   spawn: V3(0, 1.62, 14.5),
+  // LE MICRO ET LA CHANTEUSE, en MONDE : place de l'artiste, prise de la main
+  // haute (corps du micro) et de la main basse (fût). À zéro = non réglés,
+  // `stage.js` y pose alors les valeurs déduites du pied qu'il construit. Ils
+  // se déplacent au gizmo en mode éditeur (P) et se sauvent dans layout.json.
+  singerSpot: V3(0, 0, 0),
+  micHigh: V3(0, 0, 0),
+  micLow: V3(0, 0, 0),
   slots: { x0: -17.5, z0: -9, rows: 2, per: 6 },
 };
 
@@ -97,13 +108,17 @@ export function buildWorld(scene) {
   scene.environmentIntensity = 0.55;
   scene.clearColor = new B.Color4(0.02, 0.015, 0.01, 1);
   scene.fogMode = B.Scene.FOGMODE_EXP2;
-  scene.fogColor = C3(0.06, 0.035, 0.02);
-  scene.fogDensity = 0.008;
+  // brume ambrée légèrement plus dense : elle donne du VOLUME aux faisceaux
+  // et éloigne les fonds — c'est elle qui fait « grande salle »
+  scene.fogColor = C3(0.075, 0.042, 0.026);
+  scene.fogDensity = 0.0125;
 
   /* ---------- lumières ---------- */
+  // Ambiante plus BASSE et plus chaude : le luxe se joue en clair-obscur, la
+  // salle doit être éclairée par ses lustres, pas par une lumière du jour.
   const amb = new B.HemisphericLight("amb", V3(0, 1, 0), scene);
-  amb.intensity = 0.9;
-  amb.diffuse = C3(1, 0.82, 0.6);
+  amb.intensity = 0.62;
+  amb.diffuse = C3(1, 0.78, 0.52);
   amb.groundColor = C3(0.25, 0.1, 0.08);
 
   function spot(name, pos, dir, angle, intens, color, range = 30, shadows = true) {
@@ -126,13 +141,57 @@ export function buildWorld(scene) {
     bar: spot("lBar", V3(LAYOUT.bar.x, 4.4, LAYOUT.bar.z + 1.6), V3(0, -1, -0.25), 1.5, 62, C3(1, 0.72, 0.42), 16),
     fountain: spot("lFtn", V3(LAYOUT.fountain.x, 6.5, LAYOUT.fountain.z), V3(0, -1, 0), 1.25, 52, C3(0.8, 0.9, 1), 18),
     slots: spot("lSlots", V3(-12, 5.5, 0), V3(0.25, -1, 0), 1.5, 70, C3(1, 0.72, 0.5), 22),
+    // les deux tables du pit, ajoutées EN FIN de littéral : l'ordre des
+    // shadowGens (le [0] = table principale, rafraîchi chaque frame) est un
+    // contrat que d'autres modules utilisent — on ne l'altère pas
+    table1: spot("lTable1", V3(LAYOUT.blackjack1.x, 4.2, LAYOUT.blackjack1.z), V3(0, -1, 0), 1.15, 65, C3(1, 0.88, 0.66), 14),
+    table2: spot("lTable2", V3(LAYOUT.blackjack2.x, 4.2, LAYOUT.blackjack2.z), V3(0, -1, 0), 1.15, 65, C3(1, 0.88, 0.66), 14),
   };
 
-  const glow = new B.GlowLayer("glow", scene, { blurKernelSize: 48 });
-  glow.intensity = 0.35;
+  const glow = new B.GlowLayer("glow", scene, { blurKernelSize: 64 });
+  // 0,55 faisait irradier TOUT ce qui porte un émissif — enseignes, dorures,
+  // pastilles de valeur — et se cumulait au bloom du pipeline. À 0,28 les
+  // néons rayonnent encore franchement sans noyer ce qu'ils entourent.
+  glow.intensity = 0.28;
 
   /* ---------- sol ---------- */
-  const floor = B.MeshBuilder.CreateGround("floor", { width: hall.w, height: hall.d, subdivisions: 2 }, scene);
+  /**
+   * UN SEUL TRIANGLE, plus grand que le casino.
+   *
+   * Le sol était un `CreateGround` déjà réduit à `subdivisions: 1`, soit le
+   * minimum d'un quadrilatère : DEUX triangles, donc une diagonale qui
+   * traversait la salle d'un coin à l'autre en passant par le centre. C'est sur
+   * cette arête interne que le solveur de collision accrochait — l'ellipsoïde
+   * du joueur, tangente au plan du sol, touche les deux faces à la fois et les
+   * tests d'arêtes annulent le déplacement horizontal. D'où un mur invisible en
+   * diagonale, « sans aucun solide proche » (cf. src/player.js).
+   *
+   * Un triangle, lui, n'a pas d'arête interne : il suffit qu'il DÉBORDE la
+   * salle pour que ses trois côtés — les seules arêtes restantes — tombent
+   * derrière les murs. Angle droit à 2 m dehors du coin (-X, -Z), cathètes de
+   * w + d + 10 m : les côtés longent les murs -X et -Z à 2 m, et l'hypoténuse
+   * (x + z = 45) passe à 4,2 m du coin opposé. Plus une seule arête de sol à
+   * l'intérieur du casino.
+   *
+   * Les UV reprennent exactement le repère de `CreateGround` (u sur la largeur,
+   * v sur la profondeur, origine au coin -X/-Z) : avec les mêmes uScale/vScale,
+   * le damas ne bouge pas d'un pixel, il continue simplement au-delà des murs.
+   */
+  const floor = new B.Mesh("floor", scene);
+  {
+    const L = hall.w + hall.d + 10;                  // cathètes
+    const ax = -hall.w / 2 - 2, az = -hall.d / 2 - 2;  // sommet de l'angle droit
+    const pts = [[ax, az], [ax + L, az], [ax, az + L]];
+    const vd = new B.VertexData();
+    vd.positions = pts.flatMap(([x, z]) => [x, 0, z]);
+    // même sens de rotation que le premier triangle de CreateGround — c'est lui
+    // qui décide de quel côté la face est vue, donc si le sol s'affiche
+    vd.indices = [0, 1, 2];
+    vd.normals = [0, 1, 0, 0, 1, 0, 0, 1, 0];
+    vd.uvs = pts.flatMap(([x, z]) =>
+      [(x + hall.w / 2) / hall.w, (z + hall.d / 2) / hall.d]);
+    vd.applyToMesh(floor);
+  }
   const carpetMat = pbr("carpetM", scene, { color: C3(1, 1, 1), roughness: 0.94 });
   carpetMat.baseTexture = carpetTexture(scene);
   const carpetN = normalMap("carpetN", scene, 256, 26, 3.4);
@@ -166,11 +225,17 @@ export function buildWorld(scene) {
     return m;
   }
   const hw = hall.w / 2, hd = hall.d / 2;
+  // le mur +X s'OUVRE autour de la scène de cabaret : deux segments encadrent
+  // la baie (le glb de la scène fournit l'arche et remplit le pourtour)
+  const SGAP = 4.5;                      // demi-largeur de la baie
+  const sz = LAYOUT.stage.z;
+  const zLo = sz - SGAP, zHi = sz + SGAP;
   const walls = [
     wall(hall.w, hall.h, V3(0, hall.h / 2, -hd), 0),
     wall(hall.w, hall.h, V3(0, hall.h / 2, hd), 0),
     wall(hall.d, hall.h, V3(-hw, hall.h / 2, 0), Math.PI / 2),
-    wall(hall.d, hall.h, V3(hw, hall.h / 2, 0), Math.PI / 2),
+    wall(zLo + hd, hall.h, V3(hw, hall.h / 2, (zLo - hd) / 2), Math.PI / 2),
+    wall(hd - zHi, hall.h, V3(hw, hall.h / 2, (zHi + hd) / 2), Math.PI / 2),
   ];
   // lambris bas + cimaise dorée
   function wainscot(w, pos, rotY) {
@@ -186,7 +251,8 @@ export function buildWorld(scene) {
   trim.push(...wainscot(hall.w, V3(0, 0, -hd + 0.3), 0));
   trim.push(...wainscot(hall.w, V3(0, 0, hd - 0.3), 0));
   trim.push(...wainscot(hall.d, V3(-hw + 0.3, 0, 0), Math.PI / 2));
-  trim.push(...wainscot(hall.d, V3(hw - 0.3, 0, 0), Math.PI / 2));
+  trim.push(...wainscot(zLo + hd, V3(hw - 0.3, 0, (zLo - hd) / 2), Math.PI / 2));
+  trim.push(...wainscot(hd - zHi, V3(hw - 0.3, 0, (zHi + hd) / 2), Math.PI / 2));
 
   /* ---------- plafond ---------- */
   const ceilMat = pbr("ceilM", scene, { color: C3(0.09, 0.06, 0.04), roughness: 0.9 });
@@ -217,7 +283,8 @@ export function buildWorld(scene) {
   const colMat = pbr("colM", scene, { color: C3(1, 1, 1), roughness: 0.24, metallic: 0.05 });
   colMat.baseTexture = lightMarble;
   const capMat = gold(scene, 0.9);
-  for (const [px, pz] of [[-13, -11], [-13, 11], [13, -11], [13, 11], [-19, 0], [19, 0]]) {
+  // le pilier de droite était planté au milieu de la scène : on l'écarte
+  for (const [px, pz] of [[-13, -11], [-13, 11], [13, -11], [13, 11], [-19, 0], [19, -13]]) {
     const shaft = B.MeshBuilder.CreateCylinder("col", { height: hall.h - 0.6, diameter: 1.05, tessellation: 24 }, scene);
     shaft.position = V3(px, (hall.h - 0.6) / 2, pz);
     shaft.material = colMat; shaft.checkCollisions = true; shaft.receiveShadows = true;
@@ -310,7 +377,9 @@ export function buildWorld(scene) {
   for (let i = -1; i <= 1; i += 2) {
     for (let k = 0; k < 3; k++) {
       const p = B.MeshBuilder.CreateCylinder("post", { height: 1, diameter: 0.09 }, scene);
-      p.position = V3(i * 3.6, 0.5, 12 - k * 3); p.material = gold(scene, 0.7); p.checkCollisions = true;
+      // pas de collision : un poteau de 9 cm avec le halo caméra faisait un
+      // pilier fantôme de 60 cm en pleine allée d'entrée
+      p.position = V3(i * 3.6, 0.5, 12 - k * 3); p.material = gold(scene, 0.7);
       const b = B.MeshBuilder.CreateSphere("pb", { diameter: 0.18 }, scene);
       b.position = V3(i * 3.6, 1.05, 12 - k * 3); b.material = gold(scene, 0.9);
       if (k < 2) {

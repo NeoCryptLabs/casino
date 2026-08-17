@@ -60,37 +60,69 @@ export function buildBar(scene, world, audio, people) {
 
   const shelfGlow = pbr("shelfGlow", scene, { color: C3(0.2, 0.5, 0.9), emissive: C3(0.12, 0.42, 0.68) });
   const bottles = [];
+  // teintes d'alcools appliquées au VERRE des modèles Blender
   const liquidCols = [
     C3(0.55, 0.25, 0.05), C3(0.05, 0.28, 0.1), C3(0.62, 0.55, 0.1),
     C3(0.35, 0.06, 0.12), C3(0.85, 0.85, 0.9), C3(0.1, 0.2, 0.45), C3(0.7, 0.35, 0.05),
   ];
-  // un matériau par teinte, partagé par toutes les bouteilles
-  const bottleMats = liquidCols.map((col, i) => pbr("btM" + i, scene, {
-    color: col, roughness: 0.05, metallic: 0.1, alpha: 0.72, emissive: col.scale(0.34),
-  }));
+  const glassMats = liquidCols.map((col, i) => {
+    const m = pbr("btGlass" + i, scene, {
+      color: col, roughness: 0.08, metallic: 0.05, alpha: 0.78, emissive: col.scale(0.30),
+    });
+    return m;
+  });
+  const shelfYs = [];
   for (let s = 0; s < 3; s++) {
     const y = 1.35 + s * 0.62;
+    shelfYs.push(y);
     const shelf = add(B.MeshBuilder.CreateBox("shelf", { width: BW, height: 0.05, depth: 0.3 }, scene), wood);
     shelf.position = V3(BX, y, BZ - 1.38);
     const strip = add(B.MeshBuilder.CreateBox("strip", { width: BW - 0.1, height: 0.03, depth: 0.03 }, scene), shelfGlow, false);
     strip.position = V3(BX, y + 0.05, BZ - 1.25);
-
-    const n = Math.floor(BW / 0.3);
-    for (let i = 0; i < n; i++) {
-      const x = BX - BW / 2 + 0.18 + i * 0.3 + rnd(-0.03, 0.03);
-      const hgt = rnd(0.26, 0.4);
-      const g = B.MeshBuilder.CreateCylinder("bt", {
-        height: hgt, diameterTop: 0.045, diameterBottom: 0.082, tessellation: 10,
-      }, scene);
-      g.position = V3(x, y + 0.03 + hgt / 2, BZ - 1.38);
-      g.material = pick(bottleMats);
-      g.parent = root;
-      bottles.push(g);
-      const neck = B.MeshBuilder.CreateCylinder("nk", { height: 0.09, diameter: 0.028, tessellation: 8 }, scene);
-      neck.position = V3(x, y + 0.03 + hgt + 0.04, BZ - 1.38);
-      neck.material = g.material; neck.parent = root;
-    }
   }
+
+  // Les VRAIES bouteilles (assets/bottles.glb, modelées dans Blender : whisky
+  // à épaules carrées, vin à long col, gin élancé, liqueur ventrue — corps,
+  // étiquette et capsule). Chargées en différé puis clonées sur les étagères ;
+  // le verre reçoit une teinte d'alcool au hasard.
+  B.SceneLoader.ImportMeshAsync("", "/assets/", "bottles.glb", scene).then((res) => {
+    const kinds = [];
+    for (const kind of ["bottleWhisky", "bottleWine", "bottleGin", "bottleLiqueur"]) {
+      const body = res.meshes.find((m) => m.name === kind);
+      if (!body) continue;
+      const parts = res.meshes.filter((m) => m === body || m.parent === body);
+      // gabarit : les pièces regroupées sous un noeud posé à la BASE du corps
+      const bb = body.getBoundingInfo().boundingBox;
+      const tpl = new B.TransformNode("tpl_" + kind, scene);
+      tpl.position.set(bb.centerWorld.x, bb.minimumWorld.y, bb.centerWorld.z);
+      for (const p of parts) p.setParent(tpl);      // conserve la pose monde
+      tpl.setEnabled(false);
+      kinds.push({ tpl, body });
+    }
+    if (!kinds.length) return;
+    const glbRoot = res.meshes.find((m) => m.name === "__root__");
+    for (const s of shelfYs.keys()) {
+      const y = shelfYs[s];
+      const n = Math.floor(BW / 0.26);
+      for (let i = 0; i < n; i++) {
+        const x = BX - BW / 2 + 0.16 + i * 0.26 + rnd(-0.02, 0.02);
+        const k = kinds[(i + s) % kinds.length];
+        const c = k.tpl.clone("bt", root);
+        c.setEnabled(true);
+        c.position.set(x, y + 0.028, BZ - 1.38 + rnd(-0.015, 0.015));
+        c.rotation.y = rnd(0, Math.PI * 2);
+        const sc = rnd(0.9, 1.12);
+        c.scaling.scaleInPlace(sc);
+        // teinte du verre : le mesh corps du clone prend un alcool au hasard
+        for (const m of c.getChildMeshes()) {
+          if (m.name.includes("bottle")) m.material = pick(glassMats);
+          m.isPickable = false;
+        }
+        bottles.push(c);
+      }
+    }
+    glbRoot?.setEnabled(false);
+  }).catch((e) => console.warn("bottles.glb indisponible :", e));
 
   // verres retournés + shaker
   const glassMat = pbr("glassM", scene, { color: C3(0.85, 0.92, 1), roughness: 0.02, metallic: 0.05, alpha: 0.28 });

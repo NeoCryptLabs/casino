@@ -238,8 +238,24 @@ export class SlotMachine {
     this.demo = index % 3 === 1;
   }
 
-  tick(dt) {
+  /**
+   * Volume de CETTE machine pour le joueur, 0..1.
+   *
+   * Deux verrous, et il en faut deux. Les machines en démo (une sur trois)
+   * relancent leurs rouleaux toutes seules en permanence : elles doivent être
+   * MUETTES, sinon leurs crans claquent en boucle dans toute la salle même
+   * quand on ne joue pas. Et une machine qu'on joue reste locale : au-delà de
+   * 7 m on ne l'entend plus, ce qui protège aussi des spins des autres joueurs.
+   */
+  vol() {
+    if (this.demo) return 0;
+    if (!this._dist) return 1;                 // pas encore de position joueur
+    return Math.max(0, 1 - this._dist / 7) ** 2;
+  }
+
+  tick(dt, playerPos) {
     this._t += dt;
+    if (playerPos) this._dist = B.Vector3.Distance(playerPos, this.root.position);
     // pulsation des néons
     const p = 0.6 + 0.4 * Math.sin(this._t * 2.4 + this.index);
     this.glowMat.emissiveColor = C3(...hslToRgb(this.hue / 360, 0.9, 0.35 + p * 0.3)).scale(0.8);
@@ -262,7 +278,7 @@ export class SlotMachine {
             r.mesh.rotation.x += diff * Math.min(1, dt * 9);
             if (Math.abs(diff) < 0.012) {
               r.mesh.rotation.x = want; r.vel = 0; r.target = null;
-              this.audio.reelStop();
+              this.audio.reelStop(this.vol());
             }
           }
         }
@@ -278,12 +294,12 @@ export class SlotMachine {
     if (this.spinning) return null;
     this.spinning = true;
     this.demo = false;
-    this.audio.lever();
+    this.audio.lever(this.vol());
     animFloat(this.scene, this.lever, "rotation.x", 0, 0.95, 8, true, () =>
       animFloat(this.scene, this.lever, "rotation.x", 0.95, 0, 26));
 
     await wait(180);
-    this.audio.reelLoop(true);
+    this.audio.reelLoop(true, this.vol());
 
     // tirage pondéré : les gros symboles sont rares
     const roll = () => {
@@ -319,9 +335,9 @@ export class SlotMachine {
     if (win > 0) {
       this.coinPS.start();
       setTimeout(() => this.coinPS.stop(), mult >= 10 ? 2200 : 700);
-      this.audio.win(mult >= 10);
+      this.audio.slotWin(mult >= 10, this.vol());
     } else {
-      this.audio.lose();
+      this.audio.slotLose(this.vol());
     }
     return { symbols: res.map((i) => SYMBOLS[i].g), win, mult };
   }

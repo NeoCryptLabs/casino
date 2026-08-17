@@ -12,3 +12,8 @@ server/out/
 
 # fichiers de travail temporaires
 _verify.html
+
+# profils des joueurs (caisse, pseudo, position) — données d'une installation,
+# pas du dépôt
+server/players.json
+server/players.json.tmp

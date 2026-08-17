@@ -11,6 +11,17 @@ import { Player } from "./player.js";
 import { People } from "./npc.js";
 import { Audio } from "./audio.js";
 import { Net } from "./net.js";
+import { createHeat } from "./heat.js";
+import { fetchLayout, applyAnchors, applyOverrides, applyClones, loadWorldGlb, integrateWorldGlb, saveLayout } from "./layout.js";
+import { createEditor } from "./editor.js";
+import { createCinema } from "./cinema.js";
+import { buildStage } from "./stage.js";
+import { createConcert } from "./concert.js";
+import { settings } from "./settings.js";
+import { createMenu, menuIsOpen } from "./menu.js";
+import { createChat } from "./chat.js";
+import { createDealerVoice } from "./dealer.js";
+import { createJackpot } from "./jackpot.js";
 
 const B = BABYLON;
 const $ = (id) => document.getElementById(id);
@@ -18,12 +29,20 @@ const $ = (id) => document.getElementById(id);
 /* ------------------------------------------------------------------ état */
 
 const state = {
+  // La caisse est tenue par le SERVEUR (profil persistant) : cette valeur n'est
+  // qu'un miroir, posé à la connexion et recalé à chaque mouvement. 2500 n'est
+  // qu'un affichage d'attente, le temps que la liaison réponde.
   cash: 2500,
   slotBet: 10,
-  mode: "walk",     // walk | slot | table
+  mode: "menu",     // menu | walk | slot | table | stool | edit
   currentSlot: null,
   drinks: 0,
   spot: null,        // place assise revendiquee, partagee sur le reseau
+  // POINT DE SORTIE de la place occupée : là où le corps se retrouvera en se
+  // levant. Annoncé au serveur tant qu'on est assis, pour qu'il ne persiste
+  // jamais une pose assise (voir seatExit, plus bas).
+  safePos: null,
+  advance: 0,        // avance consentie par la maison à l'arrivée, à annoncer
 };
 
 /* --------------------------------------------------------------- chargement */
@@ -67,9 +86,21 @@ async function boot() {
     throw new Error("Impossible de charger le moteur physique Havok (connexion au CDN Babylon requise).");
   }
 
+  setProgress(14, "Plan du casino…");
+  await frame();
+  // Le plan est de la DONNÉE : les ancres d'un éventuel world.glb (Blender)
+  // puis le calque de l'éditeur (layout.json) se posent sur LAYOUT avant toute
+  // construction. Le JSON gagne toujours sur le glb.
+  const layout = await fetchLayout();
+  let glbWorld = null;
+  try { glbWorld = await loadWorldGlb(scene); } catch (e) { console.warn("world.glb ignoré :", e); }
+  if (glbWorld) applyAnchors(LAYOUT, glbWorld.anchors);
+  applyAnchors(LAYOUT, layout.anchors);
+
   setProgress(18, "Construction du casino…");
   await frame();
   const world = buildWorld(scene);
+  integrateWorldGlb(glbWorld, scene, world);
 
   setProgress(34, "Fontaine…");
   await frame();
@@ -88,6 +119,21 @@ async function boot() {
   await frame();
   const bar = buildBar(scene, world, audio, people);
 
+  setProgress(66, "La scène…");
+  await frame();
+  const stage = await buildStage(scene, world, audio);
+
+  // LE CONCERT : E devant la scène — annonce, rideau, entrée de la chanteuse,
+  // musique. E à nouveau pour terminer le spectacle.
+  const concert = createConcert({ scene, stage, people, audio });
+  {
+    const h = B.MeshBuilder.CreateBox("stageHit", { width: 3.2, height: 1.9, depth: 1.4 }, scene);
+    h.position = stage.at(0, -3.4, 0.95);
+    h.isVisible = false;
+    h.metadata = { interact: "concert", label: "Lancer le concert", target: concert };
+    stage.hit = h;
+  }
+
   setProgress(70, "Jetons & cartes…");
   await frame();
   const chips = new Chips(scene, audio, world);
@@ -104,7 +150,21 @@ async function boot() {
   }
 
   const ui = makeUI();
-  const bj = buildBlackjack(scene, world, audio, chips, cards, ui, state, people);
+  // LE PIT : trois tables, chacune miroir d'une table autoritaire du serveur.
+  // `bj` désigne toujours celle où le joueur est assis (la 0 par défaut).
+  const bjs = [];
+  for (let i = 0; i < 3; i++) {
+    bjs.push(buildBlackjack(scene, world, audio, chips, cards, ui, state, people, i));
+  }
+  let bj = bjs[0];
+
+  // le calque de l'éditeur se rejoue une fois tout le décor construit,
+  // AVANT la sonde de réflexion (un mesh caché ne doit pas s'y refléter)
+  const nOver = applyOverrides(scene, layout.overrides);
+  const bootClones = applyClones(scene, layout.clones, world.shadowGens[1]);
+  if (nOver || bootClones.length) {
+    console.log(`[plan] ${nOver} surcharge(s), ${bootClones.length} copie(s)`);
+  }
 
   setProgress(92, "Éclairage & post-traitement…");
   await frame();
@@ -115,27 +175,49 @@ async function boot() {
   const pipe = new B.DefaultRenderingPipeline("pipe", true, scene, [player.camera]);
   pipe.samples = 4;
   pipe.fxaaEnabled = true;
+  // Bloom RETENU. Il était généreux (seuil 0,82 / poids 0,34) et nappait tout
+  // ce qui était un peu clair — badges, dorures, reflets du feutre — au point
+  // d'éblouir. Seuil relevé et poids divisé par deux : les lustres et les néons
+  // rayonnent encore, le reste de l'image ne bave plus.
   pipe.bloomEnabled = true;
-  pipe.bloomThreshold = 0.88;
-  pipe.bloomWeight = 0.22;
-  pipe.bloomKernel = 64;
-  pipe.bloomScale = 0.6;
+  pipe.bloomThreshold = 0.90;
+  pipe.bloomWeight = 0.16;
+  pipe.bloomKernel = 96;
+  pipe.bloomScale = 0.75;
   pipe.imageProcessingEnabled = true;
   pipe.imageProcessing.toneMappingEnabled = true;
   pipe.imageProcessing.toneMappingType = B.ImageProcessingConfiguration.TONEMAPPING_ACES;
-  pipe.imageProcessing.exposure = 1.3;
-  pipe.imageProcessing.contrast = 1.12;
+  pipe.imageProcessing.exposure = 1.42;
+  pipe.imageProcessing.contrast = 1.30;      // noirs profonds, hautes lumières tenues
   pipe.imageProcessing.vignetteEnabled = true;
-  pipe.imageProcessing.vignetteWeight = 2.6;
+  pipe.imageProcessing.vignetteWeight = 3.4; // l'oeil est conduit vers le centre
   pipe.imageProcessing.vignetteStretch = 0.4;
-  pipe.imageProcessing.vignetteColor = new B.Color4(0, 0, 0, 0);
+  pipe.imageProcessing.vignetteColor = new B.Color4(0.05, 0.01, 0.0, 0);
+  // Étalonnage cinéma : une courbe qui réchauffe les hautes lumières (l'or) et
+  // refroidit à peine les ombres — le contraste ambré/bleuté d'un film de casino.
+  const curve = new B.ColorCurves();
+  curve.globalSaturation = 62;
+  curve.highlightsHue = 34; curve.highlightsDensity = 42; curve.highlightsSaturation = 28;
+  curve.midtonesHue = 30; curve.midtonesDensity = 22; curve.midtonesSaturation = 14;
+  curve.shadowsHue = 220; curve.shadowsDensity = 26; curve.shadowsSaturation = 16;
+  pipe.imageProcessing.colorCurves = curve;
+  pipe.imageProcessing.colorCurvesEnabled = true;
   pipe.grainEnabled = true;
-  pipe.grain.intensity = 3;
+  pipe.grain.intensity = 5.5;                 // grain de pellicule, pas de bruit
   pipe.grain.animated = true;
   pipe.chromaticAberrationEnabled = true;
-  pipe.chromaticAberration.aberrationAmount = 2.2;
+  pipe.chromaticAberration.aberrationAmount = 3.4;
   pipe.sharpenEnabled = true;
-  pipe.sharpen.edgeAmount = 0.18;
+  pipe.sharpen.edgeAmount = 0.24;
+  // Halo anamorphique : COUPÉ par défaut. C'était l'éblouissement le plus
+  // franc — des traînées et des fantômes sur chaque source vive, qui passaient
+  // devant le jeu. Réglages conservés et adoucis : le paramètre « Halos
+  // anamorphiques » du menu les rallume pour qui les veut.
+  pipe.lensFlareEnabled = false;
+  pipe.lensFlareStrength = 0.9;
+  pipe.lensFlareHaloWidth = 0.42;
+  pipe.lensFlareGhostDispersal = 0.28;
+  pipe.lensFlareThreshold = 0.92;
   pipe.depthOfFieldEnabled = false;
   pipe.depthOfFieldBlurLevel = B.DepthOfFieldEffectBlurLevel.Medium;
 
@@ -162,16 +244,119 @@ async function boot() {
   );
   probe.refreshRate = 1;
   scene.environmentTexture = probe.cubeTexture;
-  scene.environmentIntensity = 1.7;
+  scene.environmentIntensity = 1.95;
   setTimeout(() => { probe.refreshRate = B.RenderTargetTexture.REFRESHRATE_RENDER_ONCE; }, 1500);
 
-  raiseLightLimit(scene, 6);
+  raiseLightLimit(scene, 10);  // pit (2) + projecteurs de scène (2)
 
-  // --- perf : la lumière de table est la seule à rafraîchir ses ombres chaque
-  // frame (cartes et jetons bougent) ; les autres tous les 3 frames.
-  world.shadowGens.forEach((sg, i) => {
-    if (i > 0) sg.getShadowMap().refreshRate = 2;
+  // LA CHALEUR — le multiplicateur de série rendu comme un incendie. Créée ici
+  // et pas avec la table : elle a besoin de la caméra du joueur (distorsion,
+  // secousse), qui n'existe qu'une fois `player` construit.
+  const heat = createHeat({
+    scene, world, audio,
+    camera: player.camera,
+    feltCenter: bj.tableCenter(),
   });
+  for (const t of bjs) t.setHeat(heat);
+
+  /* ------------------------------------------------ caméras de plateau */
+
+  // Des ACTEURS-CAMÉRAS fixes, posés dans le monde — le paradigme Unreal :
+  // s'asseoir à une table COUPE vers sa caméra ; la caméra elle-même est un
+  // objet sélectionnable en mode éditeur (gizmos, molette pour le FOV), et son
+  // cadrage est persisté dans le plan (layout.cameras). Le personnage, lui,
+  // reste dans le monde.
+  const camActors = {};
+  {
+    const mkCam = (key, pos, look, fov) => {
+      const body = B.MeshBuilder.CreateBox("camActor:" + key,
+        { width: 0.16, height: 0.16, depth: 0.26 }, scene);
+      const lens = B.MeshBuilder.CreateCylinder("camLens:" + key,
+        { height: 0.14, diameterTop: 0.13, diameterBottom: 0.05, tessellation: 12 }, scene);
+      lens.rotation.x = Math.PI / 2;
+      lens.position.z = 0.19;
+      lens.parent = body;
+      lens.isPickable = false;
+      const mat = new B.StandardMaterial("camActorM:" + key, scene);
+      mat.emissiveColor = new B.Color3(0.2, 0.55, 1);
+      mat.disableLighting = true;
+      mat.alpha = 0.92;
+      body.material = mat; lens.material = mat;
+      body.position.copyFrom(pos);
+      const d = look.subtract(pos);
+      body.rotation.y = Math.atan2(d.x, d.z);
+      body.rotation.x = Math.atan2(-d.y, Math.hypot(d.x, d.z));
+      body.metadata = { camActor: key, fov };
+      body.setEnabled(false);            // visible seulement en mode éditeur
+      camActors[key] = body;
+    };
+    /**
+     * Cadrage par défaut « Inscryption », calculé pour la place centrale.
+     *
+     * L'œil était à 0,52 m devant la chaise, à 1,38 m : penché si bas et si
+     * près du tapis qu'il coupait les deux extrémités de l'information. En
+     * projetant les points de la table (v = ±1 aux bords de l'image), le
+     * panneau de message sortait par le haut (v = +1,03) tandis que mes piles
+     * de jetons (v = -1,56) et l'étiquette de ma mise (v = -1,13) sortaient par
+     * le bas : on jouait sans voir sa propre mise.
+     *
+     * L'œil recule de 20 cm et monte de 11 cm, la focale s'ouvre à peine
+     * (0,94). L'écart angulaire entre le râtelier du croupier et mes jetons
+     * passe alors sous la hauteur du champ : râtelier à v = +0,48, cartes du
+     * croupier +0,22, mes cartes -0,23, cercle de mise -0,42, étiquette -0,55,
+     * sommet de mes piles -0,88. Tout est dans le cadre, avec de la marge.
+     */
+    // UNE CAMÉRA PAR CHAISE (« table0:3 » = table 0, place 3), pas par table :
+    // le cadrage n'était calculé que pour la place centrale — assis ailleurs,
+    // on voyait ses cartes et ses jetons distribués sur le CÔTÉ de l'image.
+    // Même formule pour chaque place, orientée de SA chaise vers le centre.
+    bjs.forEach((t, i) => {
+      t.SEATS.forEach((_, si) => {
+        if (t.NPC_SEATS.includes(si)) return;    // place du figurant : pas de caméra
+        const seatW = t.seatPos(si), c = t.tableCenter();
+        const dir = c.subtract(seatW); dir.y = 0; dir.normalize();
+        const pos = seatW.add(dir.scale(0.32)); pos.y = 1.49;
+        const look = seatW.add(dir.scale(1.42)); look.y = 0.95;
+        mkCam("table" + i + ":" + si, pos, look, 0.94);
+      });
+    });
+    // cadrages sauvegardés dans le plan : ils priment sur les défauts.
+    // Ancien format « table0 » (une caméra par table, réglée pour la place
+    // centrale) : appliqué à la place 2, puis retiré — la prochaine
+    // sauvegarde n'écrira plus que le format par chaise.
+    for (const [k, sv] of Object.entries(layout.cameras || {})) {
+      let a = camActors[k];
+      if (!a && /^table\d+$/.test(k)) {
+        a = camActors[k + ":2"];
+        delete layout.cameras[k];
+      }
+      if (!a || !Array.isArray(sv.p)) continue;
+      a.position.set(sv.p[0], sv.p[1], sv.p[2]);
+      if (Array.isArray(sv.r)) { a.rotationQuaternion = null; a.rotation.set(sv.r[0], sv.r[1], sv.r[2]); }
+      if (Number.isFinite(sv.fov)) a.metadata.fov = sv.fov;
+      // distance de la poignée de visée en mode éditeur — pas de rôle au rendu
+      if (Number.isFinite(sv.aim)) a.metadata.aimDist = sv.aim;
+    }
+  }
+
+  // CINÉMA — ralenti de la révélation, arrêt sur image du bust
+  const cinema = createCinema({ scene, pipe, audio });
+  for (const t of bjs) t.setCinema(cinema);
+
+  // LA VOIX DU CROUPIER — une seule pour tout le pit : le budget de paroles
+  // est commun, deux tables ne peuvent donc pas se parler dessus.
+  const dealerVoice = createDealerVoice({ audio, settings });
+  for (const t of bjs) t.setVoice(dealerVoice);
+
+  // LE JACKPOT DU PIT — l'enseigne au-dessus des tables. La cagnotte vit côté
+  // serveur ; ici on ne fait que la regarder monter.
+  const jackpot = createJackpot({ scene, audio, ui });
+
+  // mode éditeur (F2) : vol libre, gizmos, sauvegarde du plan
+  const editor = createEditor({ scene, canvas, player, state, ui, audio, layout, world, bootClones, camActors });
+
+  // --- perf : la cadence de rafraîchissement des ombres (la table d'abord,
+  // le décor ensuite) est pilotée par le réglage « Ombres » — voir settings.js.
   scene.skipPointerMovePicking = true;
   engine.enableOfflineSupport = false;
 
@@ -182,6 +367,10 @@ async function boot() {
 
   /* ------------------------------------------------------------- réseau */
 
+  // Le salon existe AVANT la liaison : sans serveur il reste utilisable et
+  // répond « hors ligne » plutôt que d'avaler ce qu'on tape.
+  const chat = createChat({ player, audio });
+
   // Multijoueur : purement optionnel. Sans serveur WebSocket en face, `Net`
   // retente en arrière-plan et le jeu tourne exactement comme avant.
   const net = new Net({
@@ -189,36 +378,227 @@ async function boot() {
     // position réelle de chaque place assise, pour poser l'avatar sur la chaise
     spotPos: (spot) => {
       if (!spot) return null;
-      const [kind, i] = spot.split(":");
-      const n = Number(i);
-      if (kind === "blackjack") return bj.seatPos(n);
-      if (kind === "bar") return bar.stools[n] || null;
+      const parts = spot.split(":");
+      // "blackjack:table:place" — l'ancien format à 2 segments reste accepté
+      if (parts[0] === "blackjack") {
+        const t = parts.length === 3 ? Number(parts[1]) : 0;
+        const n = Number(parts[parts.length - 1]);
+        return bjs[t] ? bjs[t].seatPos(n) : null;
+      }
+      if (parts[0] === "bar") return bar.stools[Number(parts[1])] || null;
       return null;
     },
-    // la table est autoritaire côté serveur : on ne fait que la mettre en scène
-    onTable: (st, evs) => bj.applyServer(st, evs, net.id),
+    // chaque table serveur nourrit sa jumelle de mise en scène
+    onTable: (st, evs, tableIdx) => bjs[tableIdx]?.applyServer(st, evs, net.id),
+    // le concert appartient à la salle : le serveur dit la phase, on la joue
+    onConcert: (st) => concert.applyServer(st),
+    /**
+     * LA CAGNOTTE DU PIT. Elle monte en silence ; quand elle tombe, elle
+     * s'annonce à toute la salle — c'est le seul événement du casino que tout
+     * le monde apprend en même temps, où qu'il se trouve.
+     */
+    onJackpot: (m) => {
+      jackpot.set(m.value);
+      if (m.hit) jackpot.celebrate(m.hit, m.hit.pid != null && m.hit.pid === net.id);
+    },
     onCount: (n) => {
       const el = $("players");
       if (el) { el.hidden = n < 2; el.textContent = n + " joueurs"; }
     },
+    onChat: (m) => chat.receive(m),
+    /**
+     * LE RETOUR AU CASINO. Le serveur rend ce qu'il avait gardé de la dernière
+     * session : nom, caisse, dernière position DEBOUT, préférences. Rien n'est
+     * additionné ici — on repose ce qu'on nous annonce.
+     */
+    onProfile: (pr) => {
+      if (Number.isFinite(pr.cash)) { state.cash = pr.cash; ui.updateCash(); }
+      if (Number.isFinite(pr.drinks)) state.drinks = pr.drinks;
+      if (Number.isFinite(pr.slotBet)) setSlotBet(pr.slotBet, true);
+      // Le pseudo reste au client : c'est lui qu'on vient de saisir à la porte.
+      // Le nom du serveur ne sert qu'à qui arrive sans rien en mémoire — un
+      // autre navigateur, un stockage nettoyé.
+      if (pr.name && !settings.get("pseudo")) settings.set("pseudo", pr.name);
+      state.advance = pr.advance || 0;
+      if (!pr.saved) console.info("[net] session volatile : rien ne sera retenu");
+      // ...et là où il s'était arrêté. Jamais en pleine partie (voir setEntry) :
+      // ça ne vaut que pour le pas qui va franchir l'écran-titre.
+      if (Array.isArray(pr.p)) {
+        menu.setEntry(V3(pr.p[0], LAYOUT.spawn.y, pr.p[2]), pr.r);
+      }
+    },
+    // la caisse du serveur fait foi : machine à sous et bar lui déclarent leur
+    // mouvement, il répond par le solde, et c'est celui-là qui s'affiche
+    onWallet: (cash) => { state.cash = cash; ui.updateCash(); },
+    // ...et le plan des places, pour qu'il sache reposer un joueur tout seul
+    spotMap,
   });
+  chat.bind(net);
+  // le concert émet ses intentions vers le serveur ; sans liaison, il retombe
+  // sur sa machine locale et le jeu reste jouable seul
+  concert.bind(net);
   net.connect();
+
+  /* ------------------------------------------------------------- debug */
+
+  // JOURNAL DE BORD (dev) : tout événement notable est horodaté, gardé dans
+  // un tampon circulaire (window.__dbglog), affiché en console ET remonté au
+  // serveur — le back-end voit ce que vit chaque client.
+  const DBGBUF = (window.__dbglog = []);
+  let _dlogLast = 0, _dlogCount = 0;
+  function dlog(tag, msg, data) {
+    const line = `${(performance.now() / 1000).toFixed(1)}s [${tag}] ${msg}`
+      + (data !== undefined ? " " + JSON.stringify(data) : "");
+    console.log("%c" + line, "color:#e8b34a");
+    DBGBUF.push(line);
+    if (DBGBUF.length > 300) DBGBUF.shift();
+    // remontée serveur, plafonnée à 8 lignes/s pour ne pas inonder
+    const now = performance.now();
+    if (now - _dlogLast > 1000) { _dlogLast = now; _dlogCount = 0; }
+    if (net.dev && _dlogCount++ < 8 && net.ws?.readyState === 1) {
+      net.ws.send(JSON.stringify({ t: "dev", msg: line }));
+    }
+  }
+  window.__dev = window.__dev || {};
+  window.__dev.dump = () => DBGBUF.join("\n");
+
+  // battement de coeur du déplacement : position/FPS/intention toutes les 3 s
+  let _hb = 0;
+  scene.onBeforeRenderObservable.add(() => {
+    _hb += engine.getDeltaTime();
+    if (_hb < 3000 || state.mode !== "walk") return;
+    _hb = 0;
+    const p2 = player.position, cd = player.camera.cameraDirection;
+    dlog("mov", `pos(${p2.x.toFixed(1)},${p2.z.toFixed(1)}) fps=${engine.getFps().toFixed(0)}`
+      + ` camDir=${cd.length().toFixed(3)} colOn=${player.camera.checkCollisions}`);
+  });
+
+  // DEV : chaque collision inhabituelle est nommée à l'écran — l'outil
+  // anti « murs fantômes ». Sol et murs d'enceinte exclus (permanents).
+  // Auto-rapport de blocage : position + inventaire des solides à moins de
+  // 50 cm. « AUCUN solide proche » prouverait une cause HORS collisions.
+  player.onStuck = () => {
+    const pp = player.position;
+    const near = [];
+    for (const msh of scene.meshes) {
+      if (!msh.checkCollisions || !msh.isEnabled() || msh.name === "floor") continue;
+      const bb = msh.getBoundingInfo().boundingBox;
+      if (pp.x > bb.minimumWorld.x - 0.5 && pp.x < bb.maximumWorld.x + 0.5
+        && pp.z > bb.minimumWorld.z - 0.5 && pp.z < bb.maximumWorld.z + 0.5
+        && bb.minimumWorld.y < 1.7 && bb.maximumWorld.y > 0.2) {
+        near.push(msh.name + (msh.isVisible ? "" : "*"));
+      }
+    }
+    // vérité triangulaire : un rayon dans la direction du regard, sur les
+    // SEULS solides — les bbox mentent, les triangles non
+    const fwd = player.camera.getDirection(B.Axis.Z); fwd.y = 0; fwd.normalize();
+    const ray = new B.Ray(pp, fwd, 1.4);
+    const hit = scene.pickWithRay(ray, (mm) => mm.checkCollisions && mm.isEnabled());
+    const cd = player.camera.cameraDirection;
+    // garde-sol : hauteur du BAS de l'ellipsoïde au-dessus du sol réel.
+    // Négative = ellipsoïde encastrée dans le plancher — c'était la cause des
+    // blocages « sans aucun solide proche » (le sol est filtré partout ici).
+    const gRay = new B.Ray(pp, new B.Vector3(0, -1, 0), 4);
+    const gHit = scene.pickWithRay(gRay, (mm) => mm.checkCollisions && mm.isEnabled());
+    const clr = gHit?.hit ? pp.y - player.baseY - gHit.pickedPoint.y : NaN;
+    const msg = `BLOQUÉ à (${pp.x.toFixed(1)}, ${pp.z.toFixed(1)}) — `
+      + (near.length ? near.join(", ") : "AUCUN solide proche !")
+      + ` | rayonAvant=${hit?.hit ? hit.pickedMesh.name + "@" + hit.distance.toFixed(2) : "libre"}`
+      + ` | garde-sol=${Number.isFinite(clr) ? (clr * 100).toFixed(1) + "cm" : "?"}`
+      + ` | camDir=${cd.length().toFixed(4)} | fps=${engine.getFps().toFixed(0)}`;
+    dlog("STUCK", msg);
+    if (net.dev) ui.toast("[dev] " + msg, "lose");
+  };
+
+  player.onCollideDebug = (mesh) => {
+    const c = mesh.getBoundingInfo().boundingBox.centerWorld;
+    dlog("col", `${mesh.name}${mesh.isVisible ? "" : "*"} (${c.x.toFixed(1)},${c.z.toFixed(1)})`);
+    if (!net.dev || state.mode !== "walk") return;
+    if (/^(floor|wall\b)/.test(mesh.name)) return;
+    ui.toast(`[dev] contact : ${mesh.name}${mesh.isVisible ? "" : " (INVISIBLE)"} à (${c.x.toFixed(1)}, ${c.z.toFixed(1)})`);
+  };
+
+  // transitions d'état visibles dans le journal
+  let _lastMode = state.mode, _lastConcert = "idle";
+  scene.onBeforeRenderObservable.add(() => {
+    if (state.mode !== _lastMode) { dlog("mode", _lastMode + " -> " + state.mode); _lastMode = state.mode; }
+    if (concert.state !== _lastConcert) { dlog("concert", _lastConcert + " -> " + concert.state); _lastConcert = concert.state; }
+  });
 
   /* ------------------------------------------------------------- boucle */
 
-  let hovered = null, tick = 0;
+  /* ------------------------------------------------------------- menu */
+
+  // L'ÉCRAN-TITRE n'est pas une page à part : le casino est déjà là, derrière,
+  // et la caméra du joueur en fait lentement le tour. « Entrer » ne charge
+  // rien — ça repose simplement le joueur sur ses pieds.
+  const menu = createMenu({
+    player, audio,
+    driftCenter: V3(LAYOUT.fountain.x, 0, LAYOUT.fountain.z),
+    onPlay: (first) => {
+      audio.init(); audio.resume();
+      $("hud").hidden = false;
+      state.mode = "walk";
+      ui.updateCash();
+      setSlotBet(state.slotBet);
+      player.lock();
+      if (first) {
+        audio.say?.("bienvenue", { delay: 900 });
+        // un habitué n'est pas accueilli comme un inconnu
+        const pr = net.profile;
+        ui.toast(pr && pr.saved && !pr.fresh
+          ? "Content de vous revoir au Mirage" : "Bienvenue au Mirage");
+      }
+      // LA MAISON A RÉ-AVANCÉ pendant que le joueur choisissait sa musique :
+      // on le lui dit ici, une fois, et après le mot d'accueil.
+      if (state.advance) {
+        const v = state.advance;
+        state.advance = 0;
+        setTimeout(() => ui.toast("La maison vous avance " + fmt(v) + " €", "win"), 3000);
+      }
+    },
+    onResume: () => player.lock(),
+    onHome: () => {
+      $("hud").hidden = true;
+      $("prompt").hidden = true;
+      state.mode = "menu";
+    },
+  });
+
+  let hovered = null, tick = 0, devStreakIdx = 0, fpsT = 0;
   scene.onBeforeRenderObservable.add(() => {
     const dt = Math.min(0.05, engine.getDeltaTime() / 1000);
+    menu.tick(dt);                 // la ronde de caméra de l'écran-titre
     player.update(dt);
     const p = player.position;
-    net.tick(dt, state.spot);
+    net.tick(dt, state.spot, state.safePos);
 
-    for (const m of machines) m.tick(dt);
-    bj.tick(dt, p);
+    for (const m of machines) m.tick(dt, p);
+    for (const t of bjs) t.tick(dt, p);
+    heat.tick(dt);
+    editor.tick(dt);
     bar.tick(dt, p);
     for (const c of cards.live) c.tick(dt);
 
     audio.setWaterDistance(B.Vector3.Distance(p, fountain.center));
+    stage.tick(dt);
+    concert.tick(dt, p);
+    jackpot.tick(dt);
+    audio.setConcertDistance(B.Vector3.Distance(p, stage.center()));
+    // L'ambiance vit sur la scène quand on se balade, et devient un fond
+    // général dès qu'on s'assied à une table. L'écran-titre est global lui
+    // aussi : c'est là qu'on choisit la piste, elle ne peut pas y être
+    // atténuée par une caméra qui dérive à l'autre bout de la salle.
+    audio.setAmbienceDistance(B.Vector3.Distance(p, stage.center()),
+      state.mode === "table" || state.mode === "menu");
+    if (stage.hit) {
+      // Le concert appartient à la salle : l'invite doit dire ce qui se passe,
+      // y compris quand c'est un AUTRE joueur qui l'a lancé.
+      const cs = concert.state;
+      stage.hit.metadata.label = cs === "performing" ? "Terminer le concert"
+        : cs === "bow" || cs === "leaving" || cs === "closing" ? "Fin du spectacle…"
+        : concert.running ? "Le spectacle commence…" : "Lancer le concert";
+    }
 
     // visée / invite d'interaction (raycast throttlé)
     if (state.mode === "walk") {
@@ -237,27 +617,86 @@ async function boot() {
       $("prompt").hidden = true;
       $("crosshair").classList.remove("hot");
     }
+
+    // compteur d'images — paramètre JEU, quatre rafraîchissements par seconde
+    fpsT += dt;
+    if (fpsT > 0.25) {
+      fpsT = 0;
+      const el = $("fps");
+      if (!el.hidden) el.textContent = engine.getFps().toFixed(0) + " FPS";
+    }
   });
 
-  engine.runRenderLoop(() => scene.render());
+  // le hit-stop est un saut de PRÉSENTATION : la boucle tourne, l'image gèle
+  engine.runRenderLoop(() => { if (!cinema.frozen()) scene.render(); });
   addEventListener("resize", () => engine.resize());
 
   /* ------------------------------------------------------------- entrées */
 
   addEventListener("keydown", async (e) => {
+    // LE SALON D'ABORD, avant tout le reste. Ouvert, il prend TOUT le clavier :
+    // sinon taper « chaud » ferait marcher le joueur (ZQSD), demanderait une
+    // carte (H) et déclencherait la triche de chaleur (M). Fermé, il ne
+    // regarde que ⏎ — et pas au menu ni dans l'éditeur, qui ont leurs propres
+    // usages de la touche.
+    if (chat.isOpen() || (!menuIsOpen() && !player.editing)) {
+      if (chat.key(e)) return;
+    }
+    // DEV UNIQUEMENT : M fait défiler les paliers de chaleur (série forcée
+    // côté serveur -> flammes, badge ×, bonus au prochain gain, extinction à
+    // la prochaine défaite). Traité EN PREMIER, et chaque blocage s'explique
+    // au lieu d'échouer en silence. e.key et pas e.code : sur AZERTY la touche
+    // M physique envoie le code "Semicolon" — le caractère, lui, ne ment pas.
+    // DEV : X bascule le noclip (traverser les murs). Deux usages : se
+    // libérer d'un blocage, et le PROUVER — si on reste bloqué collisions
+    // coupées, la cause n'est pas une collision.
+    if ((e.key === "x" || e.key === "X") && net.dev && state.mode === "walk") {
+      player.camera.checkCollisions = !player.camera.checkCollisions;
+      ui.toast(player.camera.checkCollisions
+        ? "[dev] collisions RÉACTIVÉES" : "[dev] NOCLIP — collisions coupées");
+      return;
+    }
+    if (e.key === "m" || e.key === "M") {
+      console.log("[dev] M —", { dev: net.dev, mode: state.mode });
+      if (!net.dev) {
+        ui.toast("DEV inactif — serveur pas en mode dev (ou page pas rechargée)", "lose");
+      } else if (state.mode !== "table") {
+        ui.toast("DEV — asseyez-vous à une table de blackjack d'abord");
+      } else {
+        const cycle = [0, 1, 2, 3, 5];
+        devStreakIdx = (devStreakIdx + 1) % cycle.length;
+        net.bj("devstreak", { value: cycle[devStreakIdx] });
+        ui.toast("DEV — série " + cycle[devStreakIdx] + " : " +
+          (["éteint", "TIÈDE ×1,2", "CHAUD ×1,5", "BRÛLANT ×2", "INFERNO ×3"][devStreakIdx]));
+      }
+      return;
+    }
     if (e.code === "KeyE" && state.mode === "walk" && hovered) {
       interact(hovered);
     } else if (e.code === "KeyE" && state.mode === "stool") {
       doDrink();
     } else if (e.code === "Escape") {
+      // Assis, Échap rend d'abord sa liberté au joueur — c'est ce que promet le
+      // HUD. Debout, il ouvre la pause. (Souris verrouillée, le navigateur mange
+      // la touche : c'est alors player.onUnlock qui prend le relais.)
       if (state.mode === "table") leaveTable();
       else if (state.mode === "stool") standUp();
       else if (state.mode === "slot") leaveSlot();
+      else if (state.mode === "walk") menu.pause();
     } else if (state.mode === "table") {
       // raccourcis blackjack
       if (e.code === "KeyH" || e.code === "KeyT") net.bj("hit");
-      if (e.code === "KeyR" || e.code === "Space") net.bj("stand");
+      // UNE SEULE TOUCHE POUR « CONTINUER » : elle repose la mise pendant les
+      // mises, et reste quand c'est à moi. C'est ce qui rend l'enchaînement
+      // possible sans jamais lâcher la barre d'espace — la boucle du jeu.
+      if (e.code === "KeyR" || e.code === "Space") {
+        net.bj(bj && bj.G.phase === "betting" ? "rebet" : "stand");
+      }
+      if (e.code === "KeyC") net.bj("bank");        // encaisser la cagnotte
       if (e.code === "KeyD") net.bj("double");
+      if (e.code === "KeyS") net.bj("split");
+      if (e.code === "KeyO") net.bj("insure");
+      if (e.code === "KeyN") net.bj("noinsure");
       if (e.code === "Digit1") net.bj("bet", { value: 5 });
       if (e.code === "Digit2") net.bj("bet", { value: 25 });
       if (e.code === "Digit3") net.bj("bet", { value: 100 });
@@ -272,6 +711,11 @@ async function boot() {
   }, { passive: true });
 
   canvas.addEventListener("click", () => {
+    if (menuIsOpen()) return;
+    // Verrouiller la souris rend le focus au canvas : la saisie en cours
+    // perdrait le clavier en pleine phrase, et les touches repartiraient
+    // dans les jambes du joueur.
+    if (chat.isOpen()) return;
     if (state.mode === "walk" && !player.locked) player.lock();
   });
 
@@ -285,10 +729,75 @@ async function boot() {
       return;
     }
     audio.ui();
+    if (meta.interact === "concert") {
+      if (meta.target.state === "performing") { meta.target.stop(); ui.toast("Le spectacle se termine"); }
+      else if (!meta.target.running) { meta.target.start(); ui.toast("Mesdames et messieurs…"); }
+      // un concert lancé par quelqu'un d'autre n'appartient plus à personne :
+      // on le dit, plutôt que de laisser la touche sans effet
+      else ui.toast("Le spectacle est déjà en cours");
+      return;
+    }
     if (meta.interact === "bar") return doDrink();
     if (meta.interact === "slot") return enterSlot(meta.target);
-    if (meta.interact === "blackjack") return sitTable(meta.seat);
+    if (meta.interact === "blackjack") return sitTable(meta.seat, meta.table || 0);
     if (meta.interact === "seat") return sitStool(meta);
+  }
+
+  /* -------------------------------------------------- points de sortie */
+
+  /**
+   * DERRIÈRE LA CHAISE — où l'on repose le joueur en le relevant d'une table.
+   * Revenir à sa position d'approche le coinçait entre le siège et le plateau.
+   *
+   * Ce point sert deux fois. Au lever, bien sûr. Et tant qu'il est assis, il
+   * est annoncé au serveur comme POINT DE SORTIE : si le joueur ferme son
+   * onglet à table, c'est ÇA qui sera persisté, jamais l'œil du joueur assis —
+   * sans quoi il rouvrirait les yeux la tête dans le feutre, à l'intérieur de
+   * la chaise, à sa prochaine visite.
+   */
+  function seatExit(tableIdx, seat) {
+    const t = bjs[tableIdx];
+    if (!t || !Number.isInteger(seat) || !t.SEATS[seat]) return null;
+    return backFrom(t.seatPos(seat), t.tableCenter(), 0.9);
+  }
+
+  /**
+   * Pour un tabouret ou une machine, pas de calcul : le joueur vient d'arriver
+   * là DEBOUT, par ses propres jambes. L'endroit est donc praticable par
+   * construction — on le garde tel quel.
+   */
+  const standingHere = () => V3(player.position.x, player.baseY, player.position.z);
+
+  /** Un pas en arrière depuis une assise, en s'éloignant de ce qu'on regarde. */
+  function backFrom(seatW, facing, d = 0.9) {
+    const dir = seatW.subtract(facing); dir.y = 0;
+    if (dir.lengthSquared() < 1e-6) return V3(seatW.x, player.baseY, seatW.z);
+    dir.normalize();
+    const back = seatW.add(dir.scale(d));
+    back.y = player.baseY;
+    return back;
+  }
+
+  /**
+   * LE PLAN DES PLACES, enseigné au serveur.
+   *
+   * Le serveur n'a pas de géométrie : il ne sait pas où est la chaise 3 de la
+   * table 1, ni par où l'on en sort. Or c'est lui qui devra reposer un joueur
+   * parti sans prévenir — Alt+F4, onglet tué, réseau coupé : dans ces cas-là le
+   * navigateur n'exécute plus rien, il n'y a plus personne pour annoncer quoi
+   * que ce soit. On lui donne donc la carte À L'AVANCE, dès la connexion : la
+   * sortie de chaque place, une bonne fois, valable pour tout le monde.
+   */
+  function spotMap() {
+    const map = {};
+    const put = (k, v) => { if (v) map[k] = [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(2)]; };
+    bjs.forEach((t, ti) => {
+      for (let i = 0; i < t.SEATS.length; i++) put("blackjack:" + ti + ":" + i, seatExit(ti, i));
+    });
+    // les tabourets du bar : on s'en écarte dos au comptoir
+    const counter = V3(LAYOUT.bar.x, 0, LAYOUT.bar.z);
+    bar.stools.forEach((s, i) => put("bar:" + i, backFrom(s, counter, 0.85)));
+    return map;
   }
 
   /* ------------------------------------------------------------- tabourets */
@@ -296,7 +805,8 @@ async function boot() {
   function sitStool(meta) {
     state.mode = meta.kind === "slot" ? "slot" : "stool";
     state.spot = meta.spot || null;
-    document.exitPointerLock();
+    state.safePos = standingHere();
+    player.unlock();
     player.sitView(meta.eye, meta.look, 1.0, null,
       { yaw: meta.kind === "slot" ? 0.7 : 1.1, up: 0.35, down: 0.35 });
     if (meta.kind === "slot") {
@@ -319,6 +829,7 @@ async function boot() {
     $("prompt").hidden = true;
     state.currentSlot = null;
     state.spot = null;
+    state.safePos = null;
     player.stand(() => { state.mode = "walk"; player.frozen = false; player.lock(); });
   }
 
@@ -330,10 +841,13 @@ async function boot() {
     if (state.cash < 20) return ui.toast("Pas assez pour un verre…", "lose");
     busy = true;
     player.frozen = true;
-    state.cash -= 20; ui.updateCash();
-    document.exitPointerLock();
+    // affichage tout de suite, comptabilité au serveur : c'est lui qui tient
+    // la caisse et qui la retiendra jusqu'à la prochaine visite
+    state.cash -= 20; ui.updateCash(); net.wallet(-20);
+    player.unlock();
     await bar.serve(player.camera, ui);
     state.drinks++;
+    net.prefs({ drinks: state.drinks });
     $("drinkFx").classList.add("on");
     setTimeout(() => $("drinkFx").classList.remove("on"), 6000);
     ui.toast(state.drinks === 1 ? "Vous vous sentez chanceux…" : "Encore un ? Santé.", "win");
@@ -345,16 +859,19 @@ async function boot() {
 
   /* ------------------------------------------------------------- machine à sous */
 
-  function setSlotBet(v) {
+  /** @param {boolean} [quiet] ne pas renvoyer au serveur ce qu'il vient de dire */
+  function setSlotBet(v, quiet) {
     state.slotBet = clamp(Math.round(v / 5) * 5, 5, 200);
     $("slotbet").textContent = state.slotBet;
+    if (!quiet) net.prefs({ slotBet: state.slotBet });
   }
 
   function enterSlot(machine) {
     state.mode = "slot";
     state.currentSlot = machine;
+    state.safePos = standingHere();
     player.frozen = true;
-    document.exitPointerLock();
+    player.unlock();
     $("slotui").hidden = false;
     $("slotmsg").textContent = "MISEZ ET TIREZ LE LEVIER";
     setSlotBet(state.slotBet);
@@ -363,6 +880,7 @@ async function boot() {
     if (player.seated) return standUp();     // on était assis sur le tabouret
     state.mode = "walk";
     state.currentSlot = null;
+    state.safePos = null;
     player.frozen = false;
     $("slotui").hidden = true;
     player.lock();
@@ -374,7 +892,7 @@ async function boot() {
     const m = state.currentSlot;
     if (!m || m.spinning) return;
     if (state.cash < state.slotBet) return ui.toast("Fonds insuffisants", "lose");
-    state.cash -= state.slotBet; ui.updateCash();
+    state.cash -= state.slotBet; ui.updateCash(); net.wallet(-state.slotBet);
     $("spin").disabled = true;
     $("slotmsg").textContent = "…";
     const r = await m.spin(state.slotBet);
@@ -382,7 +900,7 @@ async function boot() {
     if (!r) return;
     $("slotmsg").textContent = r.symbols.join("   ");
     if (r.win > 0) {
-      state.cash += r.win; ui.updateCash();
+      state.cash += r.win; ui.updateCash(); net.wallet(r.win);
       ui.toast((r.mult >= 10 ? "JACKPOT  " : "GAIN  ") + "+ " + fmt(r.win) + " €", "win");
     } else {
       ui.toast("Perdu — " + fmt(state.slotBet) + " €", "lose");
@@ -391,21 +909,61 @@ async function boot() {
 
   /* ------------------------------------------------------------- blackjack */
 
-  function sitTable(seat) {
+  function sitTable(seat, tableIdx = 0) {
+    bj = bjs[tableIdx];                    // cette table devient « la mienne »
+    net.tableIdx = tableIdx;               // ...et toutes les intentions y vont
+    heat.attachTable({
+      center: bj.tableCenter(),
+      lamp: world.lights["table" + (tableIdx || "")],
+    });
     state.mode = "table";
-    state.spot = Number.isInteger(seat) ? "blackjack:" + seat : null;
-    document.exitPointerLock();
+    state.spot = Number.isInteger(seat) ? "blackjack:" + tableIdx + ":" + seat : null;
+    // le point de sortie est calculé À L'ASSISE, pas au lever : il doit être
+    // connu du serveur AVANT que le joueur ne puisse disparaître
+    state.safePos = seatExit(tableIdx, seat);
+    player.unlock();
     $("bj").hidden = false;
-    // mise au point sur sa propre main, sans flouter celle du croupier
-    pipe.depthOfFieldEnabled = true;
-    pipe.depthOfField.focalLength = 28;
-    pipe.depthOfField.fStop = 4.5;
-    pipe.depthOfField.focusDistance = 900;
     pipe.imageProcessing.vignetteWeight = 5.2;
     // ambiance « scène » : on baisse les lumières autour
     world.lights.slots.intensity = 34;
     world.lights.bar.intensity = 30;
-    player.sit(bj.seatPos(seat), bj.tableCenter(), () => { bj.sit(seat); net.bj("sit", { seat }); });
+    // ON COUPE VERS LA CAMÉRA DE PLATEAU — un acteur fixe posé dans le monde,
+    // sélectionnable et déplaçable en mode éditeur, comme dans Unreal. Le
+    // personnage, lui, reste assis sur sa chaise (les autres le voient).
+    // la caméra de SA chaise — repli sur la place centrale si besoin
+    const actor = camActors["table" + tableIdx + ":" + seat]
+      || camActors["table" + tableIdx + ":2"];
+    actor.computeWorldMatrix(true);
+    const eye = actor.getAbsolutePosition().clone();
+    const fwd = actor.getDirection(B.Axis.Z);
+
+    /**
+     * MISE AU POINT sur le feutre, mesurée et non devinée.
+     *
+     * `focusDistance` était figé à 900 (Babylon compte en MILLIMÈTRES, donc
+     * 0,9 m) : la netteté tombait DEVANT la table. Avec le cadrage par défaut
+     * l'œil est à 1,38 m et le feutre à 0,92 m, l'axe plonge d'environ 0,4 —
+     * le regard touche le feutre à ~1,16 m. Cartes et pastilles de valeur, un
+     * peu plus loin encore, étaient donc toutes hors du plan net : c'est ça
+     * qui rendait les chiffres flous.
+     *
+     * On intersecte maintenant l'axe de la caméra avec le plan du feutre, ce
+     * qui reste juste même pour un cadrage déplacé dans l'éditeur.
+     */
+    const feltY = bj.tableCenter().y;
+    const focus = fwd.y < -0.05 ? (eye.y - feltY) / -fwd.y : 1.2;
+    pipe.depthOfFieldEnabled = true;
+    pipe.depthOfField.focalLength = 28;
+    // f/4,5 ne tenait qu'une vingtaine de centimètres de profondeur : la moindre
+    // erreur de mise au point floutait tout le tapis. À f/9 la table entière est
+    // nette et seul l'arrière-plan décroche — ce qu'on veut vraiment.
+    pipe.depthOfField.fStop = 9;
+    pipe.depthOfField.focusDistance = clamp(focus, 0.6, 3) * 1000;
+    player.sitView(eye, eye.add(fwd.scale(2)), actor.metadata.fov,
+      () => {
+        bj.sit(seat); net.bj("sit", { seat });
+      },
+      { yaw: 0.4, up: 0.24, down: 0.22 });
   }
 
   function leaveTable() {
@@ -413,6 +971,14 @@ async function boot() {
       ui.msg("Le coup est en cours…");
       return;
     }
+    // on se relève DERRIÈRE la chaise — c'est le point de sortie déjà calculé
+    // à l'assise, celui-là même que le serveur retiendrait si l'on partait sans
+    // se lever. Un départ propre et un onglet fermé posent le joueur au MÊME
+    // endroit : il n'y a qu'une porte de sortie.
+    const parts = (state.spot || "").split(":");
+    const back = state.safePos
+      || (parts[0] === "blackjack" && parts.length === 3
+        ? seatExit(Number(parts[1]), Number(parts[2])) : null);
     bj.leave(); net.bj("leave");
     $("bj").hidden = true;
     pipe.depthOfFieldEnabled = false;
@@ -420,33 +986,134 @@ async function boot() {
     world.lights.slots.intensity = 80;
     world.lights.bar.intensity = 70;
     state.spot = null;
-    player.stand(() => { state.mode = "walk"; player.lock(); });
+    state.safePos = null;
+    player.stand(() => { state.mode = "walk"; player.lock(); }, back);
   }
 
   document.querySelectorAll(".chipbtn").forEach((b) =>
     (b.onclick = () => { net.bj("bet", { value: parseInt(b.dataset.v, 10) }); audio.ui(); }));
   $("clearBet").onclick = () => net.bj("clearbet");
+  $("side21").onclick = () => { net.bj("sidebet", { value: 25 }); audio.ui(); };
+  // RÉPÉTER : le raccourci de la boucle. Sans lui, chaque manche repart d'un
+  // empilage de jetons à la main — c'est le seul vrai frein à l'enchaînement.
+  $("rebet").onclick = () => { net.bj("rebet"); audio.ui(); };
+  $("bankPot").onclick = () => { net.bj("bank"); audio.ui(); };
   $("hit").onclick = () => net.bj("hit");
   $("stand").onclick = () => net.bj("stand");
   $("double").onclick = () => net.bj("double");
+  $("split").onclick = () => net.bj("split");
+  $("insYes").onclick = () => net.bj("insure");
+  $("insNo").onclick = () => net.bj("noinsure");
+
+  // ambiance sonore + volume, à même la console de table : les MÊMES réglages
+  // que le menu principal (settings applique, sauvegarde et resynchronise —
+  // changer depuis le menu pause met la console à jour, et inversement)
+  const refreshSound = () => {
+    $("ambName").textContent = settings.text("music");
+    $("volFill").style.width = (settings.ratio("volMusic") * 100).toFixed(0) + "%";
+  };
+  $("ambBtn").onclick = () => { settings.step("music", 1); audio.ui(); };
+  $("volDown").onclick = () => { settings.step("volMusic", -1); audio.ui(); };
+  $("volUp").onclick = () => { settings.step("volMusic", 1); audio.ui(); };
+  settings.onChange(refreshSound);
+  refreshSound();
 
   /* ------------------------------------------------------------- UI */
 
   function makeUI() {
     let toastTimer = null;
+    // LA FENÊTRE DES DÉCISIONS (au-dessus de la barre) : visible dès qu'un de
+    // ses groupes l'est, et DÉSARMÉE 350 ms à chaque apparition ou changement
+    // de contenu — un bouton qui vient de se matérialiser sous le curseur ne
+    // doit pas pouvoir avaler un clic parti pour autre chose.
+    let armTimer = null, floatSig = "";
+    const syncFloat = () => {
+      const f = $("bjfloat");
+      const sig = ($("bjact").hidden ? "" : "a") + ($("bjins").hidden ? "" : "i");
+      if (sig && sig !== floatSig) {
+        f.style.pointerEvents = "none";
+        clearTimeout(armTimer);
+        armTimer = setTimeout(() => { f.style.pointerEvents = ""; }, 350);
+      }
+      floatSig = sig;
+      f.hidden = !sig;
+    };
+    // ODOMÈTRE : la caisse ne saute pas, elle DÉFILE — et chaque cran de gain
+    // fait son tic de pièce. Compter ses gains est la moitié du plaisir.
+    let shownCash = null, cashRaf = 0, lastCoin = 0;
     return {
-      updateCash() { $("cash").textContent = fmt(state.cash); },
-      setBet(v) { $("betVal").textContent = fmt(v) + " €"; },
+      updateCash() {
+        const target = Math.round(state.cash);
+        if (shownCash === null) {           // premier affichage : pas de défilé
+          shownCash = target;
+          $("cash").textContent = fmt(target);
+          return;
+        }
+        if (shownCash === target) return;
+        cancelAnimationFrame(cashRaf);
+        const from = shownCash, delta = target - from;
+        const dur = clamp(300 + Math.abs(delta) * 1.4, 350, 1400);
+        const t0 = performance.now();
+        const step = (now) => {
+          const k = Math.min(1, (now - t0) / dur);
+          const eased = 1 - (1 - k) * (1 - k);
+          shownCash = Math.round(from + delta * eased);
+          $("cash").textContent = fmt(shownCash);
+          if (delta > 0 && k < 1 && now - lastCoin > 70) { lastCoin = now; audio.coin?.(); }
+          if (k < 1) cashRaf = requestAnimationFrame(step);
+        };
+        cashRaf = requestAnimationFrame(step);
+      },
+      // le HUD de table vit en RÉALITÉ AUGMENTÉE dans la scène : ces setters
+      // écrivent encore le DOM (caché, utile au debug) et surtout miroir vers
+      // la projection 3D de la table où le joueur est assis
+      setBet(v) { $("betVal").textContent = fmt(v) + " €"; bj?.arBet?.(v); },
       setPlayerVal(v) { $("playerVal").textContent = v; },
       setDealerVal(v) { $("dealerVal").textContent = v; },
-      msg(t) { $("bjmsg").textContent = t; },
+      msg(t) { $("bjmsg").textContent = t; bj?.arMsg?.(t); },
       // plus de bouton « Distribuer » : la table part d'elle-même à la fin
       // des mises, côté serveur. Conservé en no-op pour les appelants.
       enableDeal() { },
-      showBetPanel(on) { $("bjbet").hidden = !on; },
+      // les jetons se GRISENT hors phase de mise au lieu de disparaître :
+      // la barre garde la même géométrie toute la main (voir #bjbet.off)
+      showBetPanel(on) { $("bjbet").classList.toggle("off", !on); },
       showActions(on, opt = {}) {
         $("bjact").hidden = !on;
         $("double").disabled = !opt.canDouble;
+        // le bouton n'existe que quand séparer est possible — un bouton grisé
+        // en permanence serait du bruit
+        $("split").hidden = !opt.canSplit;
+        syncFloat();
+      },
+      // assurance et mise annexe : posées ici pour que la table n'écrive
+      // pas le DOM en direct
+      showInsurance(ask, cost) {
+        $("bjins").hidden = !ask;
+        if (ask) $("insCost").textContent = cost;
+        syncFloat();
+      },
+      setSide(txt) {
+        const sv = $("sideval");
+        if (sv) sv.textContent = txt;
+      },
+      /**
+       * RÉPÉTER LA MISE. Le bouton n'apparaît que lorsqu'il y a quelque chose à
+       * répéter ET que le cercle est net : ailleurs il mentirait, et un joueur
+       * qui clique un bouton sans effet cesse de le croire.
+       * @param {number} v total à reposer (mise + 21+3), 0 = rien à répéter
+       */
+      setRebet(v) {
+        const b = $("rebet");
+        if (!b) return;
+        b.hidden = !v;
+        if (v) $("rebetval").textContent = fmt(v) + " €";
+      },
+      /** ENCAISSER LA CAGNOTTE. Même règle : visible seulement s'il y a de quoi. */
+      setBank(v) {
+        const b = $("bankPot");
+        if (!b) return;
+        b.hidden = !v;
+        if (v) $("bankval").textContent = fmt(v) + " €";
       },
       toast(t, cls = "") {
         const el = $("toast");
@@ -458,26 +1125,53 @@ async function boot() {
     };
   }
 
-  // hook de debug / test automatisé
+  // hook de debug / test automatisé.
+  // On FUSIONNE : cet objet portait déjà `dump()` (le lecteur du journal, posé
+  // plus haut avec DBGBUF). Une affectation sèche l'écrasait, et le rapport de
+  // blocage devenait illisible alors que c'est justement l'outil dont on a
+  // besoin pour traquer les murs fantômes.
+  Object.assign(window.__dev, {
+    /** Force la série côté serveur (assis à une table, dev uniquement). */
+    streak: (v) => net.bj("devstreak", { value: v }),
+    /** Visuel local pur, testable même debout : palier, or, extinction. */
+    heatTier: (n) => heat.set(n),
+    gold: (big = false) => heat.gold(big),
+    extinguish: (from = 4) => heat.extinguish(from),
+    /** Sonde du concert : mains, prise du micro, bouche. Voir concert.debug(). */
+    mic: () => concert.debug(),
+    /** Réglage à chaud de la prise du micro : __dev.grip({ high: [0, .05, 0] }). */
+    grip: (o) => concert.grip(o),
+  });
   window.__game = {
-    scene, engine, state, player, bj, chips, cards, bar, machines, fountain, world, pipe, ui,
+    scene, engine, state, player, bjs, get bj() { return bj; },
+    chips, cards, bar, machines, fountain, world, pipe, ui, heat, editor, layout, camActors, stage, concert,
+    menu, settings,
     sitTable, leaveTable, enterSlot, leaveSlot, doDrink, sitStool, standUp,
   };
 
   /* ------------------------------------------------------------- lancement */
 
-  $("startBtn").hidden = false;
-  $("loadtxt").textContent = "";
-  $("startBtn").onclick = () => {
-    audio.init(); audio.resume();
-    $("loader").classList.add("gone");
-    setTimeout(() => ($("loader").style.display = "none"), 950);
-    $("hud").hidden = false;
-    ui.updateCash();
-    setSlotBet(state.slotBet);
-    player.lock();
-    ui.toast("Bienvenue au Mirage");
+  // LES PARAMÈTRES prennent la main sur le moteur : résolution, ombres, focale,
+  // volumes… tout ce que le joueur a réglé la dernière fois est reposé ici,
+  // d'un coup, maintenant que le monde entier existe.
+  // `net` : le pseudo persisté part au serveur dès que le registre s'applique
+  settings.bind({ engine, scene, player, world, pipe, ssao, audio, heat, net });
+
+  // La souris rendue au joueur SANS qu'on le lui ait demandé, c'est son Échap :
+  // le navigateur avale la touche quand le pointeur est verrouillé, ce signal
+  // est donc le seul moyen fiable d'ouvrir la pause en pleine partie.
+  player.onUnlock = (wanted) => {
+    if (wanted || menuIsOpen()) return;
+    // Échap souris verrouillée : le navigateur mange le keydown, on ne le voit
+    // QUE par ce signal. Si le salon est ouvert, c'est lui que l'on ferme —
+    // pas la partie.
+    if (chat.isOpen()) { chat.close(); return; }
+    if (state.mode === "walk") menu.pause();
   };
+
+  $("loader").classList.add("gone");
+  setTimeout(() => ($("loader").style.display = "none"), 950);
+  menu.home();
 }
 
 boot().catch((e) => {

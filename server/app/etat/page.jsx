@@ -8,7 +8,11 @@ export default function Etat() {
       <ul>
         <li><a style={{ color: "#e8c477" }} href="/index.html">Entrer dans le casino</a></li>
         <li>WebSocket temps réel sur <code>/ws</code></li>
-        <li>Aucune persistance : l’état des joueurs vit en mémoire.</li>
+        <li>
+          Pseudo, caisse et dernière position sont retenus d’une session à
+          l’autre (<code>server/players.json</code>). La partie en cours, elle,
+          vit en mémoire.
+        </li>
       </ul>
     </main>
   );

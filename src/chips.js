@@ -104,6 +104,15 @@ export class Chips {
    * réellement le vol (dynamique) puis on fige le jeton à sa place exacte
    * (cinématique) — la pile reste nette et se dépile jeton par jeton.
    */
+  /** Même règle que pour les cartes : les tables lointaines se taisent. */
+  vol(pos) {
+    const cam = this.scene.activeCamera;
+    if (!cam || !pos) return 1;
+    const d = B.Vector3.Distance(pos, cam.position);
+    // même portée resserrée que les cartes (cards.js) : sa table, pas le pit
+    return d < 2 ? 1 : Math.max(0, 1 - (d - 2) / 3.5) ** 2;
+  }
+
   setKinematic(chip) {
     const b = chip.metadata.agg.body;
     b.setLinearVelocity(V3(0, 0, 0));
@@ -160,7 +169,7 @@ export class Chips {
       let p = 0.5;
       const v = agg.body.getLinearVelocity();
       p = Math.min(1, (Math.abs(v.y) + v.length() * 0.4) * 0.55);
-      if (p > 0.06) this.audio.chip(p);
+      if (p > 0.06) this.audio.chip(p, this.vol(m.getAbsolutePosition()));
     });
 
     m.metadata = { chip: true, value: t.v, agg };
@@ -211,7 +220,7 @@ export class Chips {
     const c = 0.5, comp = (c * tflight) / (1 - Math.exp(-c * tflight));
     body.setLinearVelocity(V3(vx * comp * rnd(0.97, 1.03), vy, vz * comp * rnd(0.97, 1.03)));
     body.setAngularVelocity(V3(rnd(-9, 9), rnd(-26, 26), rnd(-9, 9)));
-    this.audio.chip(0.35);
+    this.audio.chipPlace?.(this.vol(p));
     if (opts.settle !== false) {
       setTimeout(() => this.rest(chip, target), tflight * 1000 + 420);
     }
@@ -245,7 +254,7 @@ export class Chips {
             if (idx >= 0) this.pool.splice(idx, 1);
             agg.dispose(); c.dispose();
           });
-        this.audio.chip(0.3);
+        this.audio.chip(0.3, this.vol(c.position));
       }, i * 45);
     });
   }
