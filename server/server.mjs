@@ -82,7 +82,11 @@ async function serveGameFile(req, res) {
       // demande que « a-t-il changé ? » (304). Avec no-store, chaque visite
       // re-téléchargeait l'intégralité des assets — 90 Mo de .glb et de sons.
       "cache-control": dev || ALWAYS_REVALIDATE.has(extname(target))
-        ? "no-cache"
+        // `private` en plus : Cloudflare réécrit le Cache-Control des réponses
+        // qu'il juge cachables (Browser Cache TTL de zone, 4 h) — no-cache seul
+        // ressortait en max-age=14400 et le mix de versions restait possible.
+        // Une réponse private n'est ni gardée à l'edge ni réécrite.
+        ? "private, no-cache"
         : "public, max-age=86400",
     };
     if (req.headers["if-none-match"] === etag) {
