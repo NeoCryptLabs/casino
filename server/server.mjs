@@ -52,6 +52,13 @@ const COMPRESSIBLE = new Set([".html", ".js", ".mjs", ".css", ".json", ".svg", "
 // gzip d'un .glb de 11 Mo = ~200 ms de CPU : on ne le paie qu'une fois par
 // version de fichier, le résultat reste en mémoire (clé = chemin, version = etag).
 const gzCache = new Map();
+// Le CODE (html, modules ES, css, json) doit toujours revalider : les modules
+// arrivent en ~30 requêtes séparées, et un cache qui en garde certains d'une
+// version et d'autres de la suivante mélange deux mondes — vu en vrai sur
+// mobile : un vieux world.js sans LAYOUT.roulette1 face à un venues.js neuf,
+// et boot() meurt sur « P.clone ». Un 304 par fichier ne coûte presque rien ;
+// seuls les médias lourds (glb, sons, images) méritent un vrai max-age.
+const ALWAYS_REVALIDATE = new Set([".html", ".js", ".mjs", ".css", ".json"]);
 
 /** Sert un fichier du dépôt, en refusant toute sortie de l'arborescence. */
 async function serveGameFile(req, res) {
@@ -74,7 +81,9 @@ async function serveGameFile(req, res) {
       // `no-cache` et pas `no-store` : le navigateur GARDE le fichier et ne
       // demande que « a-t-il changé ? » (304). Avec no-store, chaque visite
       // re-téléchargeait l'intégralité des assets — 90 Mo de .glb et de sons.
-      "cache-control": dev ? "no-cache" : "public, max-age=300",
+      "cache-control": dev || ALWAYS_REVALIDATE.has(extname(target))
+        ? "no-cache"
+        : "public, max-age=86400",
     };
     if (req.headers["if-none-match"] === etag) {
       res.writeHead(304, headers).end();
