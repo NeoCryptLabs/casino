@@ -1,6 +1,6 @@
 /** LE MIRAGE — casino 3D temps réel (Babylon.js 8 + Havok). Point d'entrée. */
-import { V3, C3, fmt, wait, clamp, WINDOWS } from "./util.js";
-import { buildWorld, raiseLightLimit, LAYOUT } from "./world.js";
+import { V3, C3, fmt, wait, clamp, lightBudget } from "./util.js";
+import { buildWorld, raiseLightLimit, pruneShadowCasters, LAYOUT } from "./world.js";
 import { buildFountain } from "./fountain.js";
 import { buildSlots } from "./slots.js";
 import { buildBar } from "./bar.js";
@@ -53,7 +53,23 @@ function setProgress(p, txt) {
   $("loadbar").style.width = p + "%";
   if (txt) $("loadtxt").textContent = txt;
 }
-const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+/**
+ * UNE FRAME RENDUE — ou, à défaut, un délai.
+ *
+ * Le chargement s'égrène en `await frame()` pour laisser respirer l'affichage
+ * entre deux étapes. Mais `requestAnimationFrame` est SUSPENDU par le
+ * navigateur dès que l'onglet passe en arrière-plan : quitter l'onglet pendant
+ * le chargement figeait la barre pour de bon, et il fallait recharger. Le
+ * garde-fou rend la main au bout de 100 ms si aucune frame n'est venue — la
+ * construction se poursuit sans rien perdre, l'onglet visible garde le rythme
+ * de l'affichage.
+ */
+const frame = () => new Promise((r) => {
+  let done = false;
+  const fin = () => { if (!done) { done = true; r(); } };
+  requestAnimationFrame(() => requestAnimationFrame(fin));
+  setTimeout(fin, 100);
+});
 
 /* --------------------------------------------------------------- démarrage */
 
@@ -63,9 +79,11 @@ async function boot() {
     stencil: true, antialias: true, powerPreference: "high-performance",
     preserveDrawingBuffer: false,
   });
-  // même plafond que le défaut du réglage « Qualité de rendu » (settings.js) :
-  // 1.25 sur Mac, 1 sur Windows — là-bas le GPU est déjà au tapis sans ça
-  engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio || 1, WINDOWS ? 1 : 1.25));
+  // même plafond que le défaut du réglage « Qualité de rendu » (settings.js).
+  // Le bridage à 1 sur Windows visait un GPU qu'on croyait « au tapis » : il
+  // ne l'était pas — c'est le CPU qui plafonne (soumission des draw calls),
+  // et le suréchantillonnage se paie côté GPU, où il reste de la marge.
+  engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio || 1, 1.25));
   // la carte et le pilote, en clair dans la console ET dans le dump dev :
   // c'est ce qui permet de diagnostiquer « lent chez lui » sans sa machine
   try {
@@ -75,6 +93,12 @@ async function boot() {
   } catch { /* info indisponible : sans conséquence */ }
 
   const scene = new B.Scene(engine);
+  // LE PLAFOND DE LUMIÈRES EST POSÉ AVANT LE PREMIER CHARGEMENT : c'est le
+  // chargeur glTF qui le relève (cf. raiseLightLimit), et chaque .glb du décor
+  // en déclenchait une bordée de compilations vouées à l'échec pendant l'écran
+  // de chargement. Armé ici, il est réappliqué après chaque modèle.
+  const LIGHT_CAP = Math.min(lightBudget(engine), 12);
+  raiseLightLimit(scene, LIGHT_CAP);
   scene.collisionsEnabled = true;
   scene.gravity = new B.Vector3(0, -0.35, 0);
   scene.useRightHandedSystem = false;
@@ -188,7 +212,7 @@ async function boot() {
 
   // ---- post-traitement ----
   const pipe = new B.DefaultRenderingPipeline("pipe", true, scene, [player.camera]);
-  pipe.samples = WINDOWS ? 2 : 4;   // le MSAA ×4 coûte cher aux GPU intégrés
+  pipe.samples = 4;                 // mesuré sans effet notable : on est CPU-limité
   pipe.fxaaEnabled = true;
   // Bloom RETENU. Il était généreux (seuil 0,82 / poids 0,34) et nappait tout
   // ce qui était un peu clair — badges, dorures, reflets du feutre — au point
@@ -266,12 +290,20 @@ async function boot() {
   scene.environmentIntensity = 1.95;
   setTimeout(() => { probe.refreshRate = B.RenderTargetTexture.REFRESHRATE_RENDER_ONCE; }, 1500);
 
-  // pit (2) + scène (2) + restaurant/VIP/caisse. Sur Windows, 8 : le sol — un
-  // triangle unique touché par les 10 lumières ET les 6 cartes d'ombres —
-  // engendrait un shader que le compilateur D3D d'ANGLE mettait des secondes à
-  // avaler, quand il n'abandonnait pas (salle sans éclairage). À 8, seuls les
-  // derniers spots sans ombre (restaurant/VIP/caisse) lâchent le sol.
-  raiseLightLimit(scene, WINDOWS ? 8 : 12);
+  // pit (2) + scène (2) + restaurant/VIP/caisse. Le plafond n'est plus deviné
+  // d'après l'user-agent mais LU sur le pilote : c'est le nombre de blocs
+  // uniformes disponibles qui commande, et lui seul (cf. lightBudget). Sur
+  // ANGLE/D3D11 il vaut 8, sur Metal davantage — sans jamais dépasser les 12
+  // lumières que la salle sait utiliser.
+  raiseLightLimit(scene, LIGHT_CAP);
+  console.info("[gpu] budget lumières/matériau :", LIGHT_CAP);
+
+  // Le décor est complet : chaque spot ne garde que ce qu'il peut réellement
+  // assombrir. C'est le poste de soumission le plus lourd de la frame.
+  {
+    const pr = pruneShadowCasters(world);
+    console.info(`[ombres] projeteurs : ${pr.before} -> ${pr.after}`);
+  }
 
   // LA CHALEUR — le multiplicateur de série rendu comme un incendie. Créée ici
   // et pas avec la table : elle a besoin de la caméra du joueur (distorsion,

@@ -11,7 +11,6 @@
  * ctx = { engine, scene, player, world, pipe, ssao, audio, heat, net }
  */
 
-import { WINDOWS } from "./util.js";
 
 const STORE = "mirage.settings.v1";
 // marqueur du recalage Windows (voir constructeur) : posé une fois, jamais relu
@@ -34,7 +33,7 @@ export const DEFS = [
     label: "Qualité de rendu", hint: "résolution interne",
     // Windows : GPU intégrés fréquents + rendu via ANGLE/D3D — on part de
     // NORMALE (le joueur peut toujours remonter dans ce menu)
-    def: WINDOWS ? 1 : 1.25,
+    def: 1.25,
     options: [
       { v: 0.75, label: "BASSE" },
       { v: 1, label: "NORMALE" },
@@ -48,7 +47,7 @@ export const DEFS = [
   {
     key: "shadows", group: "image", type: "enum",
     label: "Ombres", hint: "lustres, projecteurs, table",
-    def: WINDOWS ? "low" : "high",
+    def: "high",
     options: [
       { v: "off", label: "AUCUNE" },
       { v: "low", label: "BASSES" },
@@ -71,7 +70,7 @@ export const DEFS = [
   {
     key: "ssao", group: "image", type: "toggle",
     label: "Occlusion ambiante", hint: "contact au sol, coûteux",
-    def: !WINDOWS,
+    def: true,
     apply(v, ctx) {
       const { scene, ssao, player } = ctx;
       if (!ssao) return;
@@ -269,18 +268,22 @@ class Settings {
         if (d) this.values[k] = sanitize(d, v);
       }
       /**
-       * RECALAGE WINDOWS, une seule fois. `_save()` fige TOUTES les valeurs —
-       * y compris les défauts jamais touchés : taper son pseudo suffisait à
-       * graver « HAUTE / ombres hautes / SSAO » dans le navigateur. Les
-       * joueurs Windows existants n'auraient donc jamais vu les nouveaux
-       * défauts. On les leur repose ici (vers le bas seulement), puis on pose
-       * le marqueur : leurs choix ultérieurs ne seront plus jamais écrasés.
+       * RECALAGE WINDOWS, une seule fois — et désormais VERS LE HAUT.
+       *
+       * La version précédente rabaissait résolution, ombres et occlusion sur
+       * Windows, et `_save()` gravait ces valeurs : les joueurs concernés
+       * gardaient une image dégradée pour toujours. Le motif était un GPU
+       * qu'on croyait saturé ; il ne l'était pas — la salle disparaissait par
+       * moitiés faute de shaders compilables (cf. lightBudget), et la frame
+       * est bornée par le CPU. On rend donc l'image à ceux à qui on l'avait
+       * prise, une seule fois, puis on ne touche plus à leurs choix.
        */
-      if (WINDOWS && !localStorage.getItem(WIN_TUNED)) {
-        localStorage.setItem(WIN_TUNED, "1");
-        this.values.resolution = Math.min(this.values.resolution, 1);
-        if (this.values.shadows === "high") this.values.shadows = "low";
-        this.values.ssao = false;
+      if (localStorage.getItem(WIN_TUNED) === "1") {
+        localStorage.setItem(WIN_TUNED, "2");
+        for (const k of ["resolution", "shadows", "ssao"]) {
+          const d = byKey.get(k);
+          if (d) this.values[k] = d.def;
+        }
         this._saveSoon = true;
       }
     } catch { /* stockage indisponible : on garde les défauts */ }

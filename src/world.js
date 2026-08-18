@@ -1,5 +1,5 @@
 /** Architecture du casino : sol, murs, plafond, piliers, lustres, éclairage. */
-import { V3, C3, pbr, gold, canvasTex, normalMap, rnd, rndInt, merge, WINDOWS } from "./util.js";
+import { V3, C3, pbr, gold, canvasTex, normalMap, rnd, rndInt, merge } from "./util.js";
 const B = BABYLON;
 
 /**
@@ -149,13 +149,15 @@ export function buildWorld(scene) {
     const s = new B.SpotLight(name, pos, dir, angle, 6, scene);
     s.intensity = intens; s.diffuse = color; s.specular = color; s.range = range;
     if (shadows) {
-      // Windows/ANGLE : chaque carte d'ombre alourdit le shader de TOUT
-      // matériau qu'elle touche — cartes plus petites et PCF minimal, sinon la
-      // compilation D3D gèle le chargement (voir WINDOWS dans util.js).
-      const sg = new B.ShadowGenerator(WINDOWS ? 512 : 1024, s);
+      // Les cartes étaient réduites de moitié sur Windows (512, PCF minimal)
+      // pour fuir une compilation D3D qui gelait le chargement. La vraie cause
+      // était le dépassement de blocs uniformes (cf. lightBudget), désormais
+      // corrigé — et la frame est limitée par la SOUMISSION des draw calls,
+      // pas par le GPU. Mesuré : repasser en 1024/PCF moyen coûte ~3 ms sur
+      // 58, soit le bruit de mesure. Windows retrouve donc l'image du Mac.
+      const sg = new B.ShadowGenerator(1024, s);
       sg.usePercentageCloserFiltering = true;
-      sg.filteringQuality = WINDOWS
-        ? B.ShadowGenerator.QUALITY_LOW : B.ShadowGenerator.QUALITY_MEDIUM;
+      sg.filteringQuality = B.ShadowGenerator.QUALITY_MEDIUM;
       sg.bias = 0.00035; sg.normalBias = 0.012;
       sg.darkness = 0.28;
       shadowGens.push(sg);
@@ -487,6 +489,86 @@ export function buildWorld(scene) {
 }
 
 /** Autorise plus de 4 lumières simultanées sur tous les matériaux. */
+/**
+ * PLAFOND DE LUMIÈRES PAR MATÉRIAU — et il faut le TENIR, pas seulement le poser.
+ *
+ * Le franchir ne dégrade pas l'image : il empêche le shader de compiler (une
+ * lumière = un bloc uniforme, cf. `lightBudget` dans util.js). Or le chargeur
+ * glTF de Babylon relève le plafond de TOUS les matériaux de la scène — y
+ * compris ceux qu'il n'a pas créés — à la fin de CHAQUE chargement :
+ *
+ *     for (const m of scene.materials)
+ *       m.maxSimultaneousLights = Math.max(m.maxSimultaneousLights, scene.lights.length);
+ *
+ * C'est un `Math.max` : le plafond ne peut que monter, et un réglage posé
+ * avant un chargement est systématiquement écrasé. Avec 14 lumières dans la
+ * salle, tout matériau repassait donc à 14 — soit 17 blocs uniformes, quand
+ * ANGLE/D3D11 en autorise 12. Sur Metal (macOS) la marge absorbe le surplus et
+ * rien ne se voit ; sur Windows la moitié des shaders ne compilait plus.
+ *
+ * On réapplique donc le plafond à trois moments : maintenant, à chaque nouveau
+ * matériau, et après chaque chargement glTF — y compris ceux qui arrivent en
+ * cours de partie (la chanteuse du concert).
+ */
+/**
+ * ÉLAGAGE DES LISTES D'OMBRES — le décor s'inscrivait auprès de TOUS les spots.
+ *
+ * Le motif `world.shadowGens.forEach((sg) => sg.addShadowCaster(m))` est
+ * partout dans le décor : chaque objet finissait donc dans les six cartes
+ * d'ombres, y compris celles de spots situés à l'autre bout de la salle et qui
+ * ne peuvent pas l'atteindre. Mesuré : entre 965 et 1708 objets par carte, pour
+ * des spots dont la portée couvre une table ou un bar.
+ *
+ * Un spot ne projette rien au-delà de sa portée : on retire donc de chaque
+ * liste ce que la lumière ne touche pas. L'image est identique — ces objets ne
+ * marquaient aucun pixel de la carte —, mais le coût de soumission tombe.
+ *
+ * Appelé UNE fois le décor construit. Les objets mobiles (jetons, cartes,
+ * figurants) s'inscrivent après coup et seulement auprès du spot de leur table,
+ * ils ne repassent pas par ici.
+ */
+export function pruneShadowCasters(world) {
+  let before = 0, after = 0;
+  for (const sg of world.shadowGens) {
+    const light = sg.getLight && sg.getLight();
+    const map = sg.getShadowMap();
+    if (!light || !map || !map.renderList) continue;
+    const reach = (light.range || 30) + 2;      // marge : pénombre et biais
+    const lp = light.position;
+    before += map.renderList.length;
+    map.renderList = map.renderList.filter((m) => {
+      if (!m || m.isDisposed()) return false;
+      m.computeWorldMatrix(true);
+      const bs = m.getBoundingInfo().boundingSphere;
+      return B.Vector3.Distance(bs.centerWorld, lp) - bs.radiusWorld <= reach;
+    });
+    after += map.renderList.length;
+  }
+  return { before, after };
+}
+
 export function raiseLightLimit(scene, n = 6) {
-  scene.materials.forEach((m) => { if ("maxSimultaneousLights" in m) m.maxSimultaneousLights = n; });
+  const cap = (m) => {
+    if (m && "maxSimultaneousLights" in m && m.maxSimultaneousLights !== n) {
+      m.maxSimultaneousLights = n;
+    }
+  };
+  const capAll = () => scene.materials.forEach(cap);
+  capAll();
+
+  if (scene._lightCapObserver) {
+    scene.onNewMaterialAddedObservable.remove(scene._lightCapObserver);
+  }
+  scene._lightCapObserver = scene.onNewMaterialAddedObservable.add(cap);
+
+  // Le garde-fou du chargeur : posé une seule fois, il survit à tous les
+  // chargements suivants. `onCompleteObservable` tombe APRÈS le relèvement du
+  // chargeur — c'est ce qui nous rend le dernier mot.
+  if (!scene._lightCapLoaderHook) {
+    scene._lightCapLoaderHook = B.SceneLoader.OnPluginActivatedObservable.add((loader) => {
+      if (loader && loader.onCompleteObservable) loader.onCompleteObservable.add(capAll);
+    });
+  }
+  scene._lightCap = n;
+  return n;
 }

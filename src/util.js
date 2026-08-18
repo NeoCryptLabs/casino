@@ -11,13 +11,40 @@ export const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 export const fmt = (n) => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 
 /**
- * WINDOWS : là-bas WebGL passe par ANGLE/Direct3D, dont le compilateur de
- * shaders est des ordres de grandeur plus lent que Metal — un matériau touché
- * par 10 lumières et 6 cartes d'ombres PCF y met des SECONDES à compiler (gel
- * au chargement, éclairage absent tant que le shader n'est pas prêt). Les
- * budgets lumière/ombre/échantillonnage se réduisent donc sur cette plateforme.
+ * BUDGET DE LUMIÈRES — mesuré sur le pilote, pas deviné sur l'user-agent.
+ *
+ * Babylon donne à CHAQUE lumière son propre bloc uniforme (`uniform Light0
+ * {...}`, `Light1`, …), en plus des blocs `Scene`, `Material` et `Mesh`. Le
+ * nombre de blocs qu'un shader peut déclarer est plafonné par le pilote :
+ *
+ *   - ANGLE/Metal (macOS)   : large — tout passe, d'où « ça marche sur Mac »
+ *   - ANGLE/D3D11 (Windows) : GL_MAX_VERTEX_UNIFORM_BUFFERS = 12, point final
+ *
+ * Au-delà, la compilation échoue avec « VERTEX shader uniform block count
+ * exceeds GL_MAX_VERTEX_UNIFORM_BUFFERS ». Babylon retombe alors sur un shader
+ * dégradé, réessaie, échoue encore — et le matériau n'est JAMAIS prêt : le
+ * mesh n'est pas dessiné du tout, et la tentative de compilation recommence à
+ * chaque frame. C'est à la fois le décor troué et l'effondrement du framerate.
+ *
+ * On lit donc la limite réelle et on réserve les blocs non-lumineux.
  */
-export const WINDOWS = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+export function lightBudget(engine) {
+  const FALLBACK = 4;
+  try {
+    const gl = engine._gl;
+    const blocks = Math.min(
+      gl.getParameter(gl.MAX_VERTEX_UNIFORM_BLOCKS),
+      gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_BLOCKS));
+    if (!Number.isFinite(blocks) || blocks <= 0) return FALLBACK;
+    // Blocs à réserver, MESURÉS sur ANGLE/D3D11 (12 disponibles) : `Scene`,
+    // `Material`, `Mesh`, `Bones` pour les personnages animés, `Morph` pour
+    // leurs expressions, plus un de marge. À 8 lumières, 27 shaders refusaient
+    // encore de compiler ; à 6, plus aucun.
+    return clamp(blocks - 6, 1, 12);
+  } catch {
+    return FALLBACK;      // pas de contexte GL exploitable : on reste prudent
+  }
+}
 
 /** PBR material factory with sane defaults. */
 export function pbr(name, scene, opt = {}) {
