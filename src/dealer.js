@@ -158,7 +158,10 @@ export function createDealerVoice({ audio, settings }) {
     // queue : une réplique importante qui arrive pendant que ça parle ATTEND
     // la fin au lieu d'être jetée (voir audio.say) — c'est ce qui rendait
     // « blackjack » muet quand « rien ne va plus » finissait de sonner.
-    audio.say?.(f, { cooldown: 400, delay: opt.delay || 0, queue: L.p >= 2 });
+    // un moment fort attend jusqu'à 8 s dans la file : il ne PEUT PAS expirer
+    // derrière deux répliques ordinaires (cf. maxWait dans audio.say)
+    audio.say?.(f, { cooldown: 400, delay: opt.delay || 0, queue: L.p >= 2,
+      maxWait: urgent ? 8000 : 4000 });
     return true;
   }
 

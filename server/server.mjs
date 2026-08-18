@@ -227,6 +227,22 @@ function attachRealtime(server) {
     join(GAME_ROOT, "assets", "sfx", "concert_song.mp3"),
     join(GAME_ROOT, "assets", "voice", "annonce_concert.mp3"));
 
+  // LE SPECTACLE AUTOMATIQUE. Chaque fois que la salle se repeuple — personne,
+  // puis au moins un joueur — le concert se lance tout seul dix minutes plus
+  // tard, si la salle ne s'est pas revidée entre-temps. Un spectacle déjà en
+  // cours à l'échéance (lancé à la main) vaut lancement : `start` le refuse,
+  // on n'insiste pas.
+  const CONCERT_AUTO_MS = 10 * 60 * 1000;
+  let concertAuto = null;
+  const armConcertAuto = () => {
+    clearTimeout(concertAuto);
+    concertAuto = setTimeout(() => {
+      concertAuto = null;
+      if (players.size) concert.start(0, "la maison");
+    }, CONCERT_AUTO_MS);
+    concertAuto.unref?.();
+  };
+
   const TABLE_TICK = setInterval(() => {
     tables.forEach((t) => t.tick());
     concert.tick();
@@ -274,6 +290,8 @@ function attachRealtime(server) {
       free: profile.p ? [...profile.p] : null,
       posted: false,
     };
+    // la salle était vide et se repeuple : le compte à rebours du spectacle part
+    if (!players.size) armConcertAuto();
     players.set(id, me);
 
     // état initial : qui es-tu, qui est là, ET où en est la table — un arrivant
@@ -434,6 +452,8 @@ function attachRealtime(server) {
       }
       tables.forEach((t) => t.leave(id));
       if (!players.delete(id)) return;
+      // salle vide : le spectacle programmé n'a plus de public, on l'annule
+      if (!players.size) { clearTimeout(concertAuto); concertAuto = null; }
       broadcast(wss, { t: "leave", id });
       console.log(`[ws] -${id} (${players.size} restant${players.size > 1 ? "s" : ""})`);
       // le dépôt ne peut pas attendre le battement suivant : l'onglet est déjà

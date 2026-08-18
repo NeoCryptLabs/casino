@@ -54,15 +54,17 @@ const T_EMPTY = { betting: 3500, payout: 3000 };
  * Douze secondes suffisent pour décider, sauf le jour où le téléphone sonne.
  * Sans filet, la table tranchait à la place du joueur : sa main était figée
  * sur RESTER, sa mise en jeu, et il revenait sur un coup qu'il n'avait pas
- * joué. Le filet, c'est une RÉSERVE : quand le chrono de décision arrive à
- * zéro, une barre est consommée d'office et le temps repart pour T_BANK.
+ * joué. Le filet, c'est une RÉSERVE DE MILLISECONDES : quand le chrono de
+ * décision arrive à zéro, elle prend le relais et ne fond QUE pendant le
+ * dépassement — agir 3 s après la limite coûte 3 s, pas la réserve entière.
  *
  * Trois règles font tout l'objet :
  *  - elle ne se recharge JAMAIS toute seule — ni à la main suivante, ni en
  *    changeant de table, ni en revenant demain (elle vit dans le profil) ;
- *  - une barre par DÉCISION : le sursis ne se rejoue pas sur la même carte,
- *    mais tirer relance le chrono normal, et une autre barre peut y passer ;
- *  - elle se rachète au tapis, TIME_BANK_PRICE la barre, entre deux manches.
+ *  - elle ne s'écoule QUE hors du temps normal : le tour standard reste
+ *    gratuit, seul le débordement se paie, à la milliseconde près ;
+ *  - elle se rachète au tapis, TIME_BANK_PRICE le plein, réserve épuisée
+ *    seulement, entre deux manches.
  *
  * Elle ne couvre QUE la décision (tirer / rester / doubler / séparer) : c'est
  * le seul moment où l'horloge coûte une main. Ne pas miser à temps ne coûte
@@ -73,7 +75,9 @@ const T_EMPTY = { betting: 3500, payout: 3000 };
  * base. Le sursis est pour celui qui est encore là, pas pour celui qui est
  * parti.
  */
-const T_BANK = 20000;
+// en dessous de ce restant, la réserve ne vaut plus un sursis : le temps
+// d'afficher la jauge, il serait déjà écoulé
+const T_BANK_MIN = 400;
 /**
  * Le rachat coûte une bouchée de pain — dix euros, moins que la plus petite
  * mise. Ce n'est PAS un prix : c'est un geste. Ce qui coûte au joueur, ce n'est
@@ -242,13 +246,14 @@ export class Table {
   /**
    * Ouvre le chrono de DÉCISION de cette place — le seul endroit d'où il part.
    *
-   * Il repasse `tbankOn` à faux : chaque nouvelle décision repart sur le temps
-   * normal, donc le sursis peut être redemandé (et une deuxième barre y
-   * passer). Sans ce point de passage unique, un joueur ayant tiré pendant son
-   * sursis serait resté marqué « en sursis » et n'en aurait plus jamais eu.
+   * Il règle un sursis encore ouvert (temps consommé retenu, `tbankOn` à
+   * faux) : chaque nouvelle décision repart sur le temps normal, et ce qui
+   * reste de réserve peut resservir. Sans ce point de passage unique, un
+   * joueur ayant tiré pendant son sursis serait resté marqué « en sursis »
+   * et n'en aurait plus jamais eu.
    */
   _turnTimer(s) {
-    s.tbankOn = false;
+    this._tbankSettle(s);
     this._setPhase("player", this._auto(s) ? 1200 : T.turn);
   }
 
@@ -292,7 +297,7 @@ export class Table {
     return {
       round: this.round,
       phase: this.phase,
-      // la barre de temps s'achète : son prix et son plafond viennent d'ici,
+      // la réserve de temps s'achète : son prix et sa taille viennent d'ici,
       // pour qu'un bouton client n'affiche jamais un tarif que la table refuse
       tbankPrice: TIME_BANK_PRICE,
       tbankMax: TIME_BANK_MAX,
@@ -326,8 +331,8 @@ export class Table {
         streak: s.streak, tier: heatOf(s.streak).tier, mult: heatOf(s.streak).mult,
         // la cagnotte et la mise à répéter : deux boutons du client en dépendent
         pot: s.pot, lastBet: s.lastBet, lastSide: s.lastSide,
-        // la réserve de temps, et le sursis en cours : la jauge du client change
-        // de couleur sur le second, le nombre de barres se lit sur le premier
+        // la réserve de temps (ms), et le sursis en cours : la jauge du client
+        // change de couleur sur le second, le restant se lit sur le premier
         tbank: Math.max(0, Math.floor(s.wallet?.tbank || 0)), tbankOn: !!s.tbankOn,
       })),
     };
@@ -404,7 +409,8 @@ export class Table {
     // partant : quitter la table (ou perdre sa liaison) l'encaisse d'office,
     // comme les mises non engagées juste au-dessus.
     if (s.pot > 0) { s.wallet.cash += s.pot; s.pot = 0; }
-    s.playerId = null; s.name = null; s.orphan = false; s.tbankOn = false;
+    this._tbankSettle(s);   // parti en plein sursis : le débordement se paie
+    s.playerId = null; s.name = null; s.orphan = false;
     s.bet = 0; s.side = 0; s.insurance = 0; s.insResponded = false;
     s.hand = []; s.split = null; s.done = false; s.result = null;
     s.streak = 0; s.lastBet = 0; s.lastSide = 0;
@@ -503,17 +509,17 @@ export class Table {
   }
 
   /**
-   * RACHETER UNE BARRE DE TEMPS.
+   * RACHETER SA RÉSERVE DE TEMPS (le plein, pas une tranche).
    *
    * Deux verrous, et ils font toute la mécanique :
    *
    *  - ENTRE DEUX MANCHES seulement, jamais pendant sa propre décision. Payer
    *    pour prolonger le coup en cours reviendrait à acheter du temps à la
    *    table ENTIÈRE : les autres attendraient le portefeuille du plus lent.
-   *  - RÉSERVE VIDE seulement (`held >= TIME_BANK_MAX`, et le plafond vaut 1).
-   *    On ne fait pas provision de sursis : le filet se retend APRÈS qu'on l'a
-   *    consommé. Sans ce verrou, dix euros posés d'avance à chaque manche
-   *    rendaient le chrono décoratif.
+   *  - RÉSERVE ÉPUISÉE seulement (`held < T_BANK_MIN` : un fond de réserve
+   *    inutilisable compte comme vide). On ne fait pas provision de sursis :
+   *    le filet se retend APRÈS qu'on l'a consommé. Sans ce verrou, dix euros
+   *    posés d'avance à chaque manche rendaient le chrono décoratif.
    *
    * L'argent part à la maison et ne rejoint pas `staked` : ce n'est pas une
    * mise, ça ne se gagne pas, et ça ne doit donc pas gonfler le plafond de la
@@ -525,9 +531,11 @@ export class Table {
     if (!s || !s.playerId) return;
     const w = s.wallet;
     const held = Math.max(0, Math.floor(w.tbank || 0));
-    if (held >= TIME_BANK_MAX || w.cash < TIME_BANK_PRICE) return;
+    // « réserve épuisée seulement » : un fond de réserve sous le seuil d'un
+    // sursis utile compte comme vide — il ne vaut plus rien à la table
+    if (held >= T_BANK_MIN || w.cash < TIME_BANK_PRICE) return;
     w.cash -= TIME_BANK_PRICE;
-    w.tbank = held + 1;
+    w.tbank = TIME_BANK_MAX;
     this._push({ t: "buytime", seat: s.i, price: TIME_BANK_PRICE, left: w.tbank });
     this._flush();
   }
@@ -566,13 +574,29 @@ export class Table {
     if (s.tbankOn) return false;                 // le sursis ne se rejoue pas
     const w = s.wallet;
     const held = Math.max(0, Math.floor(w?.tbank || 0));
-    if (!held) return false;
-    w.tbank = held - 1;
+    if (held < T_BANK_MIN) return false;
+    // RIEN N'EST DÉBITÉ ICI : le sursis reçoit TOUT le restant, et seul le
+    // temps réellement écoulé sera retenu au règlement (_tbankSettle) — c'est
+    // toute la différence avec l'ancienne barre consommée d'office.
     s.tbankOn = true;
-    this._setPhase("player", T_BANK);
-    this._push({ t: "timebank", seat: s.i, ms: T_BANK, left: w.tbank });
+    s.tbankFrom = Date.now();
+    this._setPhase("player", held);
+    this._push({ t: "timebank", seat: s.i, ms: held });
     this._flush();
     return true;
+  }
+
+  /**
+   * RÈGLEMENT DU SURSIS : retient de la réserve le temps réellement passé
+   * au-delà du chrono normal — à l'action du joueur, au timeout, ou à son
+   * départ. C'est le SEUL endroit où la réserve fond.
+   */
+  _tbankSettle(s) {
+    if (!s.tbankOn) return;
+    s.tbankOn = false;
+    const w = s.wallet;
+    const used = Math.max(0, Date.now() - (s.tbankFrom || Date.now()));
+    w.tbank = Math.max(0, Math.floor((w.tbank || 0) - used));
   }
 
   action(playerId, what) {
@@ -586,6 +610,9 @@ export class Table {
     if (this.phase !== "player" || this.turn !== s.i) return;
     const ah = this._activeHand(s);
     if (!ah) return;
+    // agir pendant le sursis arrête le compteur : seul le débordement
+    // réellement consommé est retenu de la réserve
+    this._tbankSettle(s);
     if (what === "hit") this._hit(s);
     else if (what === "stand") { this._markDone(s, ah.h); this._advance(s); }
     else if (what === "double") {
@@ -731,7 +758,7 @@ export class Table {
     this.dealer = [];
     for (const s of this.seats) {
       s.hand = []; s.split = null; s.done = false; s.result = null;
-      s.insurance = 0; s.insResponded = false; s.tbankOn = false;
+      s.insurance = 0; s.insResponded = false; this._tbankSettle(s);
       // LA MISE À RÉPÉTER se retient ICI, au moment où elle est engagée : plus
       // tard, `s.side` aura été remis à zéro par le règlement du 21+3 et un
       // double aurait faussé `s.bet`.
@@ -868,7 +895,9 @@ export class Table {
         else if (pv < dv) res = "lose";
         else { res = "push"; gain = bet; }
         stake += bet; back += gain;
-        return { res, gain };
+        // `natural` : la main ÉTAIT un blackjack, même soldée « push » parce
+        // que la banque en a un aussi — le client doit pouvoir le crier
+        return { res, gain, natural: res0 === "bj" };
       };
 
       const main = settle(s.hand, s.bet, s.result);
@@ -929,6 +958,7 @@ export class Table {
 
       this._push({
         t: "result", seat: s.i, h: 0, result: main.res, gain: main.gain, bonus, net,
+        natural: main.natural,
         streak: s.streak, tier: heat.tier, mult: heat.mult, heatName: heat.name, brokeAt,
         pot: s.pot, potLost,
       });
@@ -997,6 +1027,7 @@ export class Table {
           // la banque de temps d'abord : elle rend la main à son joueur au lieu
           // de la lui figer sur RESTER
           if (this._grantTime(s)) break;
+          this._tbankSettle(s);       // sursis épuisé : la réserve tombe à zéro
           this._markDone(s, ah.h);
           this._push({ t: "timeout", seat: s.i });
           this._advance(s);

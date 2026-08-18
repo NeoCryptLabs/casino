@@ -262,6 +262,9 @@ export class Audio {
     this._musicTimer = setTimeout(() => {
       if (!url) { el.pause(); return; }
       el.src = url;
+      // concert en cours : le flux reste en pause, la fin du spectacle le
+      // relancera sur cette nouvelle piste
+      if (this._ambDuck) return;
       el.play().catch(() => { });      // sans geste utilisateur : on retentera
       this._musicFade(this._musicVol(), 2.2);
     }, had ? 600 : 0);
@@ -295,8 +298,8 @@ export class Audio {
     if (this.ready && this._musicUrl) this._musicFade(this._musicVol(), 0.12);
   }
 
-  /** Niveau réel : le plafond, le curseur, et l'effacement pendant le concert. */
-  _musicVol() { return MUSIC_MAX * this._musicLevel * (this._ambDuck ? 0.15 : 1); }
+  /** Niveau réel : le plafond, le curseur — et RIEN pendant le concert. */
+  _musicVol() { return this._ambDuck ? 0 : MUSIC_MAX * this._musicLevel; }
 
   _musicFade(to, sec) {
     if (!this._musicGain) return;
@@ -328,10 +331,23 @@ export class Audio {
     }
     this._concertOn = !!on;
     // deux musiques à la fois, c'est une musique de trop : l'ambiance de salle
-    // se range derrière la chanteuse, et revient quand le rideau tombe.
+    // S'ARRÊTE pendant le spectacle — fondu rapide puis pause du flux — et
+    // repart quand le rideau tombe.
     this._ambDuck = !!on;
-    if (this._musicUrl) this._musicFade(this._musicVol(), on ? 0.9 : 2.5);
+    clearTimeout(this._ambPauseTimer);
+    if (this._musicUrl) {
+      if (on) {
+        this._musicFade(0, 0.9);
+        this._ambPauseTimer = setTimeout(() => {
+          if (this._ambDuck) this._music?.pause();
+        }, 1000);
+      } else {
+        this._music?.play().catch(() => { });
+        this._musicFade(this._musicVol(), 2.5);
+      }
+    }
     if (on) {
+      this._concertSpace = 0;          // le morceau montera de la scène, en fondu
       this._fxBuf("concert_song").then((buf) => {
         if (!buf || !this._concertOn) return;
         this._concertLen = buf.duration;
@@ -488,11 +504,19 @@ export class Audio {
     return this._concertLen || 0;
   }
 
-  /** Distance joueur -> scène, pour le volume du concert (portée salle entière). */
+  /**
+   * Distance joueur -> scène, appelée chaque frame : le concert SORT DE LA
+   * SCÈNE. Comme l'ambiance, il décroît avec la distance et s'éteint au-delà
+   * de sa portée — on doit pouvoir le situer à l'oreille depuis n'importe où
+   * dans la salle. Le lissage évite l'escalier de gain quand on marche.
+   */
   setConcertDistance(d) {
     if (!this.ready || !this._concertGain || !this._concertOn || !this._concertSrc) return;
-    const v = Math.max(0.25, 1 - d / 44);   // un concert s'entend PARTOUT
-    this._concertGain.gain.value = 0.5 * v;
+    const RANGE = 30;                // plus loin que l'ambiance : c'est un spectacle
+    const target = Math.max(0, 1 - d / RANGE) ** 1.4;
+    const cur = this._concertSpace ?? target;
+    this._concertSpace = cur + (target - cur) * 0.08;
+    this._concertGain.gain.value = 0.6 * this._concertSpace;
   }
 
   // ---------- sons d'action (échantillons uniquement) ----------
@@ -701,22 +725,25 @@ export class Audio {
    */
   preloadVoice(name) { if (this.ready) this._loadVoice(name); }
 
-  async say(name, { vol = 0.9, cooldown = 1500, delay = 0, queue = false, waited = 0 } = {}) {
+  async say(name, { vol = 0.9, cooldown = 1500, delay = 0, queue = false, waited = 0, maxWait = 4000 } = {}) {
     // Journal de diagnostic : une annonce muette peut l'être pour cinq raisons
     // très différentes, et sans trace on ne peut que deviner. `[voix]` dans la
     // console dit laquelle.
     if (!this.ready) { console.warn("[voix]", name, "— contexte audio non initialisé"); return; }
-    if (delay) { setTimeout(() => this.say(name, { vol, cooldown, queue }), delay); return; }
+    if (delay) { setTimeout(() => this.say(name, { vol, cooldown, queue, maxWait }), delay); return; }
     const now = performance.now();
     this._sayAt = this._sayAt || new Map();
     if (now < (this._speakUntil || 0)) {
       // `queue` : la réplique ATTEND la fin de celle en cours au lieu d'être
       // jetée — deux évènements proches (« rien ne va plus » puis un
       // blackjack) doivent donner deux phrases, pas une. Garde-fou : au-delà
-      // de 4 s d'attente cumulée, l'annonce n'a plus de sens, on la lâche.
+      // de `maxWait` d'attente cumulée, l'annonce n'a plus de sens, on la
+      // lâche. Les MOMENTS FORTS passent un maxWait plus long : trois
+      // répliques empilées au paiement suffisaient à faire expirer les 4 s,
+      // et « blackjack » partait à la poubelle une fois marqué comme dit.
       const wait = this._speakUntil - now + 60;
-      if (queue && waited + wait <= 4000) {
-        setTimeout(() => this.say(name, { vol, cooldown, queue, waited: waited + wait }), wait);
+      if (queue && waited + wait <= maxWait) {
+        setTimeout(() => this.say(name, { vol, cooldown, queue, waited: waited + wait, maxWait }), wait);
         return;
       }
       console.warn("[voix]", name, "— écrasée : ça parle encore pendant",

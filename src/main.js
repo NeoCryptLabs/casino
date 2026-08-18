@@ -737,7 +737,7 @@ async function boot() {
         net.bj(bj && bj.G.phase === "betting" ? "rebet" : "stand");
       }
       if (e.code === "KeyC") tryBank();             // encaisser la cagnotte
-      if (e.code === "KeyB") tryBuyTime();          // racheter une barre de temps
+      if (e.code === "KeyB") tryBuyTime();          // recharger la réserve de temps
       if (e.code === "KeyD") net.bj("double");
       if (e.code === "KeyS") net.bj("split");
       if (e.code === "KeyO") net.bj("insure");
@@ -1302,25 +1302,29 @@ async function boot() {
       /**
        * LA RÉSERVE DE TEMPS, sous le chrono du bandeau.
        *
-       * Une barre par sursis encore disponible, et RIEN d'autre : pas de
-       * compteur chiffré, pas de jauge à moitié pleine. Ce filet est
-       * tout-ou-rien, l'afficher autrement laisserait croire qu'on peut en
-       * dépenser la moitié. Vide, la ligne reste — barrée et éteinte : c'est
-       * l'information qui compte, « il ne t'en reste plus ».
-       * @param {number} n barres en réserve
-       * @param {boolean} on sursis en cours
+       * Une jauge à l'échelle du restant, et le compte en secondes : la
+       * réserve fond au réel (3 s de dépassement coûtent 3 s), l'afficher
+       * tout-ou-rien mentirait. Vide, la ligne reste — barrée et éteinte :
+       * c'est l'information qui compte, « il ne t'en reste plus ».
+       * @param {number} ms réserve restante, en millisecondes
+       * @param {boolean} on sursis en cours (elle fond sous les yeux)
+       * @param {number} max taille du réservoir, pour l'échelle de la jauge
        */
-      setTimeBank(n, on = false) {
+      setTimeBank(ms, on = false, max = 20000) {
         const el = $("bjbank");
         if (!el) return;
         const seated = state.mode === "table";
         el.hidden = !seated;
         if (!seated) return;
+        const sec = Math.ceil(Math.max(0, ms) / 1000);
         el.classList.toggle("on", !!on);
-        el.classList.toggle("empty", !n);
-        $("bjbankpips").innerHTML = n > 0 ? "<i></i>".repeat(n) : "<i class='off'></i>";
-        $("bjbanklbl").textContent = on ? "TEMPS ADDITIONNEL"
-          : n > 0 ? "RÉSERVE" : "RÉSERVE ÉPUISÉE";
+        el.classList.toggle("empty", !sec);
+        $("bjbankpips").innerHTML = sec > 0
+          ? "<i style='width:" + Math.max(6, Math.round(104 * Math.min(1, ms / max))) + "px'></i>"
+          : "<i class='off'></i>";
+        $("bjbanklbl").textContent = (on ? "TEMPS ADDITIONNEL"
+          : sec > 0 ? "RÉSERVE" : "RÉSERVE ÉPUISÉE")
+          + (sec > 0 ? " · " + sec + " s" : "");
       },
       /** +TEMPS. Fantôme quand on ne peut pas acheter — géométrie fixe. */
       setBuyTime(price) {

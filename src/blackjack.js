@@ -381,6 +381,30 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     });
   }
 
+  /**
+   * Décompose une MONNAIE À RENDRE en tenant compte des colonnes déjà en
+   * place : chaque valeur ne prend que ce qui reste de son quota (celui de
+   * bankBreakdown), le surplus monte en gros jetons. Décomposer l'appoint
+   * façon bankBreakdown regonflait la colonne de 5 à chaque pluie — les
+   * piles doivent rester à peu près équilibrées entre elles.
+   */
+  function rainBreakdown(amount) {
+    amount = Math.floor(Math.max(0, amount) / 5) * 5;
+    const n = { 5: 0, 25: 0, 100: 0, 500: 0 };
+    for (const [v, g, q] of [[5, 5, 14], [25, 4, 11], [100, 5, 12]]) {
+      const min = (amount % (v * g)) / v;              // l'appoint obligatoire
+      const room = Math.max(0, q - bcount(v) - min);   // ce que la colonne accepte encore
+      const k = Math.max(0, Math.min(Math.floor(room / g),
+        Math.floor((Math.floor(amount / v) - min) / g)));
+      n[v] = min + g * k;
+      amount -= n[v] * v;
+    }
+    n[500] = Math.floor(amount / 500);
+    const out = [];
+    for (const v of [...BANK_VALS].reverse()) for (let i = 0; i < n[v]; i++) out.push(v);
+    return out;
+  }
+
   /** Bâtit la banque d'un coup (à l'assise), sans animation. */
   function bankBuild(cash) {
     bank.built = true;
@@ -432,10 +456,15 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
       while (need > 0) { const c = bankTake(v); if (!c) break; excess.push(c); need -= v; }
       if (need <= 0) break;
     }
-    if (need < 0) rain.push(...bankBreakdown(-need));
-    // colonnes qui débordent : un groupe part au râtelier, le gros jeton revient
-    for (const [v, g, cap] of [[5, 5, 18], [25, 4, 14], [100, 5, 15]]) {
-      while (bcount(v) >= cap + g
+    if (need < 0) rain.push(...rainBreakdown(-need));
+    // colonnes qui débordent : dès qu'une colonne dépasse son quota de
+    // bankBreakdown d'un groupe entier, le croupier fait de la monnaie jusqu'à
+    // la ramener AU quota — pas juste sous le seuil de déclenchement, sinon la
+    // colonne de 5 plafonnait à 22 jetons quand les autres en montraient dix.
+    // La marge d'un groupe reste ce qui évite l'échange à chaque manche.
+    for (const [v, g, q] of [[5, 5, 14], [25, 4, 11], [100, 5, 12]]) {
+      if (bcount(v) < q + g) continue;
+      while (bcount(v) > q
         && (bank.meshes.get(v)?.length ?? 0) === bcount(v)) {
         for (let j = 0; j < g; j++) { const c = bankTake(v); if (c) excess.push(c); }
         rain.push(v * g);
@@ -1358,13 +1387,11 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
         }
       } else if (ev.t === "timebank") {
         // LE SURSIS S'ENGAGE — tout seul, sans un clic. C'est le principe :
-        // celui qui n'est pas là ne peut rien cliquer. On le DIT fort, parce
-        // qu'une barre vient de partir et qu'elle ne reviendra pas.
+        // celui qui n'est pas là ne peut rien cliquer. On le DIT : la réserve
+        // s'écoule maintenant, et seul le temps consommé sera retenu.
         if (G.seated && ev.seat === PLAYER_SEAT) {
-          ui.toast(ev.left > 0
-            ? "TEMPS ADDITIONNEL — une barre consommée, il en reste " + ev.left
-            : "TEMPS ADDITIONNEL — dernière barre consommée, la réserve est vide",
-            ev.left > 0 ? "" : "lose");
+          ui.toast("TEMPS ADDITIONNEL — la réserve s'écoule ("
+            + Math.ceil((ev.ms || 0) / 1000) + " s restantes)");
           audio.chipRiffle?.();
           voice?.say("vite", { delay: 400 });
         } else {
@@ -1375,7 +1402,8 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
         }
       } else if (ev.t === "buytime") {
         if (G.seated && ev.seat === PLAYER_SEAT) {
-          ui.toast("Barre de temps rachetée — " + fmt(ev.price) + " € (réserve : " + ev.left + ")");
+          ui.toast("Réserve de temps rechargée — " + fmt(ev.price) + " € ("
+            + Math.round((ev.left || 0) / 1000) + " s)");
           audio.chipRiffle?.();
         }
       } else if (ev.t === "result") {
@@ -1431,14 +1459,17 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
           sparkBurst(ev.seat, ev.seat === PLAYER_SEAT && G.seated
             ? (ev.result === "bj" ? 1.6 : 1) + (ev.bonus > 0 ? 0.4 : 0)
             : 0.35);
-          if (ev.result === "bj") {
-            confettiBurst(ev.seat);
-            // L'ANNONCE D'ARÈNE « BLACKJACK ! » se crie pour TOUTE place de la
-            // table, pas seulement la mienne — comme les confettis, c'est
-            // l'événement de la table. Toujours, jamais autre chose : la seule
-            // réplique de l'intention est ann_blackjack (voir dealer.js), et
-            // `force` + priorité 3 la font passer devant tout. Deux blackjacks
-            // dans la même donne = un seul cri (délai propre de l'intention).
+          if (ev.result === "bj") confettiBurst(ev.seat);
+          // L'ANNONCE D'ARÈNE « BLACKJACK ! » se crie pour TOUTE place de la
+          // table, pas seulement la mienne — comme les confettis, c'est
+          // l'événement de la table. Toujours, jamais autre chose : la seule
+          // réplique de l'intention est ann_blackjack (voir dealer.js), et
+          // `force` + priorité 3 la font passer devant tout. Deux blackjacks
+          // dans la même donne = un seul cri (délai propre de l'intention).
+          // `ev.natural` : blackjack soldé « push » (la banque en a un aussi) —
+          // la main reste un blackjack, le cri part quand même ; seuls les
+          // confettis exigent la victoire.
+          if (ev.result === "bj" || ev.natural) {
             if (G.seated) voice?.say("blackjack", { delay: 420, force: true });
           }
         }
@@ -1677,15 +1708,16 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
         // (`#bjbet.off`) : proposé en phase de paiement, il serait mort au
         // clic. Le serveur, lui, accepte aussi le paiement (raccourci C).
         ui.setBank?.(me && me.pot > 0 && state.phase === "betting" ? me.pot : 0);
-        // LA RÉSERVE DE TEMPS : le nombre de barres restantes, et le sursis en
+        // LA RÉSERVE DE TEMPS : le restant en millisecondes, et le sursis en
         // cours. Affichée en permanence à table — elle ne se recharge pas
         // toute seule, autant que le joueur voie fondre son filet.
-        ui.setTimeBank?.(me ? me.tbank || 0 : 0, !!(me && me.tbankOn));
-        // +TEMPS : entre deux manches, et seulement RÉSERVE VIDE — le plafond
-        // vaut 1, donc `< tbankMax` dit exactement « tu as consommé la tienne ».
-        // Le serveur revalide tout (voir buyTime).
+        ui.setTimeBank?.(me ? me.tbank || 0 : 0, !!(me && me.tbankOn),
+          state.tbankMax || 20000);
+        // +TEMPS : entre deux manches, et seulement RÉSERVE ÉPUISÉE — sous
+        // 400 ms il ne reste rien d'utilisable (même seuil que le serveur,
+        // qui revalide tout : voir buyTime).
         const price = state.tbankPrice || 0;
-        ui.setBuyTime?.(me && price && (me.tbank || 0) < (state.tbankMax || 0)
+        ui.setBuyTime?.(me && price && (me.tbank || 0) < 400
           && me.cash >= price && (state.phase === "betting" || state.phase === "payout")
           ? price : 0);
       }
@@ -1704,6 +1736,7 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
         || (state.phase === "insurance" && !!me && !me.insResponded);
       timer.bank = !!(me && me.tbankOn && state.phase === "player"
         && state.turn === PLAYER_SEAT);
+      timer.bankMax = state.tbankMax || 20000;
       timer.show = G.seated
         && ["betting", "player", "insurance"].includes(state.phase);
       if (G.seated) {
@@ -1814,6 +1847,16 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
               }
             }
           } else timer.lastSec = -1;
+          // PENDANT LE SURSIS, le temps du chrono EST la réserve (le serveur
+          // lui a accordé tout le restant) : la ligne RÉSERVE fond donc en
+          // direct, seconde par seconde — c'est ça qu'on paie.
+          if (timer.bank) {
+            const sec = Math.ceil(left / 1000);
+            if (sec !== timer.lastBankSec) {
+              timer.lastBankSec = sec;
+              ui.setTimeBank?.(left, true, timer.bankMax || 20000);
+            }
+          } else timer.lastBankSec = -1;
         }
       }
       // pastilles : le « pop » à chaque changement de valeur, puis retour

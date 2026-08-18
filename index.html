@@ -168,8 +168,8 @@
   <div id="bjtop" hidden>
     <div id="bjmsg"></div>
     <div id="bjtimer" hidden><div id="bjtimerfill"></div></div>
-    <!-- LA RÉSERVE DE TEMPS, sous le chrono : autant de barres que le joueur
-         en a encore. Elle est LUE au moment où le chrono devient rouge — donc
+    <!-- LA RÉSERVE DE TEMPS, sous le chrono : une jauge à l'échelle du restant
+         (en secondes). Elle est LUE au moment où le chrono devient rouge — donc
          elle doit vivre juste dessous, pas dans un coin d'écran. -->
     <div id="bjbank" hidden><span id="bjbankpips"></span><b id="bjbanklbl">RÉSERVE</b></div>
   </div>
@@ -195,7 +195,7 @@
            sans que le bouton bouge sous le curseur. -->
       <button id="rebet" class="txtbtn ghost" disabled title="Reposer la mise du coup précédent (R ou Espace)">RÉPÉTER <b id="rebetval">—</b></button>
       <button id="bankPot" class="txtbtn ghost" disabled title="Encaisser la cagnotte de série (C) — elle est acquise, mais la série repart de zéro">ENCAISSER <b id="bankval">—</b></button>
-      <button id="buyTime" class="txtbtn ghost" disabled title="Racheter une barre de temps additionnel (B) — 10 €, entre deux manches, et seulement une fois la vôtre consommée. Elle vous laisse 20 s de plus quand le chrono expire.">+TEMPS <b id="buytimeval">—</b></button>
+      <button id="buyTime" class="txtbtn ghost" disabled title="Recharger la réserve de temps (B) — 10 €, entre deux manches, et seulement une fois la vôtre épuisée. 20 s qui ne s'écoulent que quand le chrono du tour expire — seul le dépassement consommé est retenu.">+TEMPS <b id="buytimeval">—</b></button>
     </div>
     <div id="bjsound">
       <button id="ambBtn" class="sndbtn" title="Changer d'ambiance sonore"><i>♪</i><b id="ambName">—</b></button>

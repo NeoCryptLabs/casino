@@ -43,20 +43,22 @@ export const ADVANCE_CASH = 500;
 /**
  * LA BANQUE DE TEMPS vit DANS LE PROFIL, pas sur la place.
  *
- * C'est tout son sens : une barre consommée ne revient pas — ni à la main
+ * C'est tout son sens : le temps consommé ne revient pas — ni à la main
  * suivante, ni en changeant de table, ni en rechargeant la page. Si elle était
  * portée par la place, il aurait suffi de se relever pour la retrouver pleine,
  * et le rachat n'aurait rien coûté à personne.
  *
- * UNE SEULE BARRE À LA FOIS. Le plafond n'est pas une limite de confort, c'est
- * la mécanique elle-même : on ne peut racheter QUE la réserve vide, donc jamais
- * faire provision de sursis avant d'en avoir eu besoin. Le filet se retend
- * après coup, jamais à l'avance.
+ * ELLE SE COMPTE EN MILLISECONDES, et ne fond QUE pendant le dépassement :
+ * le chrono normal du tour ne l'entame jamais. Déborder de 3 s coûte 3 s —
+ * il en reste 17 pour les prochaines fois, pas zéro. Le plafond reste la
+ * mécanique elle-même : on ne peut racheter QUE la réserve épuisée, donc
+ * jamais faire provision de sursis avant d'en avoir eu besoin.
  *
- * Le nouveau venu en reçoit UNE, offerte par la maison. Ensuite il paye.
+ * Le nouveau venu reçoit la réserve pleine, offerte par la maison. Ensuite
+ * il paye.
  */
-export const TIME_BANK_START = 1;
-export const TIME_BANK_MAX = 1;
+export const TIME_BANK_START = 20000;   // ms
+export const TIME_BANK_MAX = 20000;     // ms — la taille du réservoir
 
 const clampNum = (v, lo, hi, def) =>
   Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def;
@@ -92,8 +94,13 @@ function sanitize(id, raw) {
   p.slotBet = Math.round(clampNum(Number(raw.slotBet), 5, 200, 10));
   p.staked = Math.round(clampNum(Number(raw.staked), 0, 1e12, 0));
   p.back = Math.round(clampNum(Number(raw.back), 0, 1e12, 0));
-  // un profil d'avant la banque de temps n'a pas le champ : il reçoit sa barre
-  p.tbank = Math.round(clampNum(Number(raw.tbank), 0, TIME_BANK_MAX, TIME_BANK_START));
+  // un profil d'avant la banque de temps n'a pas le champ : réserve offerte.
+  // MIGRATION : les anciens profils comptaient en BARRES (0 ou 1) — une
+  // valeur ≤ 1 est une barre d'antan et vaut le réservoir entier ; au-delà,
+  // ce sont déjà des millisecondes.
+  let tb = Number(raw.tbank);
+  if (Number.isFinite(tb) && tb >= 0 && tb <= 1) tb = tb * TIME_BANK_MAX;
+  p.tbank = Math.round(clampNum(tb, 0, TIME_BANK_MAX, TIME_BANK_START));
   const soon = Date.now() + 86_400_000;       // une horloge un peu avancée, pas l'an 3000
   p.seen = clampNum(Number(raw.seen), 0, soon, Date.now());
   p.created = clampNum(Number(raw.created), 0, soon, p.seen);
