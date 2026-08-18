@@ -176,11 +176,16 @@ export class People {
     const base = B.LoadAssetContainerAsync
       ? await B.LoadAssetContainerAsync(BASE_MODEL, scene)
       : await B.SceneLoader.LoadAssetContainerAsync("", BASE_MODEL, scene);
-    kits.push({ url: BASE_MODEL, container: base, male: false });
+    kits.push({ url: BASE_MODEL, container: base, male: false, fallback: true });
     for (const url of OPTIONAL) {
       const c = await tryLoad(scene, url);
       if (c) kits.push({ url, container: c, male: IS_MALE.test(url) });
     }
+    // Michelle ne sert plus que de filet : dès qu'un figurant dédié est présent
+    // dans assets/, elle disparaît de la salle. Elle reste chargée — son
+    // matériau nourrit la tenue de service (_prepareUniform) et elle rattrape
+    // un déploiement où tous les .glb optionnels manqueraient.
+    if (kits.length > 1) kits[0].hidden = true;
     // Personnel : modèles dédiés, modelés et riggés à part (squelette Mixamo,
     // poids automatiques). `staff: role` réserve le kit à ce poste, pour qu'un
     // client ne se retrouve jamais habillé en croupier. Repli sur le mannequin
@@ -274,7 +279,7 @@ export class People {
   spawn(pos, faceY, o = {}) {
     const scene = this.scene;
     // le personnel a son propre modèle ; les clients ne le portent jamais
-    const extra = (k) => !k.staff && !k.avatar && !k.singer;
+    const extra = (k) => !k.hidden && !k.staff && !k.avatar && !k.singer;
     const bySex = () => (o.sex === "m" && this.hasMale
       ? this.kits.filter((k) => k.male && extra(k))
       : this.kits.filter((k) => extra(k) && (o.sex !== "f" || !k.male)));
