@@ -72,6 +72,7 @@ const ANCHOR_DEFS = [
 ];
 
 export function createEditor({ scene, canvas, player, state, ui, audio, layout, world, bootClones, camActors = {} }) {
+  let net = null;                  // liaison serveur, posée par main.js (bind)
   const $ = (id) => document.getElementById(id);
   let active = false;
   let selected = null;
@@ -547,6 +548,10 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
     // P en secours de F2 : sur Mac, F2 est pris par la luminosité sans Fn
     if (e.code === "F2" || (e.code === "KeyP" && !e.metaKey && !e.ctrlKey)) {
       if (state.mode !== "walk" && state.mode !== "edit") return;
+      // l'éditeur n'existe qu'en LOCAL : le serveur annonce `dev` (NODE_ENV)
+      // dans son hello. En production la touche reste inerte — on autorise
+      // quand même la sortie, au cas où le drapeau tombe en plein montage.
+      if (state.mode === "walk" && !net?.dev) return;
       e.preventDefault();
       if (state.mode === "walk") enter();
       else exit();
@@ -733,5 +738,5 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
     el.textContent = t + (dirty ? "  •  non sauvé" : "");
   }
 
-  return { tick, get active() { return active; }, enter, exit, save };
+  return { tick, get active() { return active; }, enter, exit, save, bind(n) { net = n; } };
 }

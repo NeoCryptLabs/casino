@@ -533,5 +533,8 @@ export function createMenu({ player, audio, driftCenter, onPlay, onResume, onHom
     if (kind === "pause") { click(); resume(); }
   }
 
-  return { home, pause, resume, tick, setEntry, isOpen: () => OPEN, get started() { return started; } };
+  return { home, pause, resume, tick, setEntry, isOpen: () => OPEN,
+    get started() { return started; },
+    /** La ronde de l'écran-titre possède-t-elle la caméra en ce moment ? */
+    get drifting() { return drifting; } };
 }

@@ -12,7 +12,7 @@
  */
 import { V3, C3, pbr, gold, canvasTex, rnd, rndInt, pick, animVec, fmt } from "./util.js";
 import { LAYOUT } from "./world.js";
-import { CHIP_H } from "./chips.js";
+import { CHIP_H, CHIP_R } from "./chips.js";
 const B = BABYLON;
 
 const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
@@ -474,15 +474,30 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     if (rain.length) bankAdd(rain, { start: excess.length ? 500 : 180 });
   }
 
-  // jetons décoratifs devant les PNJ
+  // jetons décoratifs devant les PNJ : les VRAIS matériaux texturés de
+  // chips.js (une valeur par colonne), en colonnes nettes alignées sur le
+  // rail comme la banque du joueur — sans physique, c'est du décor
   for (const p of npcs) {
     const cs = toWorld(p.seat.chipSpot);
-    for (let k = 0; k < rndInt(4, 11); k++) {
-      const c = B.MeshBuilder.CreateCylinder("nc", { height: CHIP_H, diameter: 0.042, tessellation: 12 }, scene);
-      c.position = V3(cs.x + rnd(-0.02, 0.02), TOP_Y + 0.004 + k * (CHIP_H + 0.0003), cs.z + rnd(-0.02, 0.02));
-      c.material = pick(rackMats);
-      world.shadowGens.forEach(sg => sg.addShadowCaster(c));
-    }
+    const dirX = Math.cos(root.rotation.y + p.seat.a);
+    const dirZ = -Math.sin(root.rotation.y + p.seat.a);
+    const vals = [...BANK_VALS].sort(() => rnd(-1, 1)).slice(0, rndInt(2, 3));
+    vals.forEach((v, col) => {
+      const off = (col - (vals.length - 1) / 2) * 0.052;
+      for (let k = 0, n = rndInt(2, 6); k < n; k++) {
+        const c = B.MeshBuilder.CreateCylinder("nc", {
+          height: CHIP_H, diameter: CHIP_R * 2, tessellation: 28,
+          faceUV: chips._faceUV, cap: B.Mesh.CAP_ALL,
+        }, scene);
+        c.material = chips.templates.get(v);
+        c.position = V3(cs.x + dirX * off + rnd(-0.0015, 0.0015),
+          TOP_Y + CHIP_H / 2 + k * CHIP_H,
+          cs.z + dirZ * off + rnd(-0.0015, 0.0015));
+        c.rotation.y = rnd(0, 6.28);
+        c.receiveShadows = true;
+        world.shadowGens.forEach(sg => sg.addShadowCaster(c));
+      }
+    });
   }
 
   // une zone d'interaction PAR place libre, chacune porteuse de son index et
@@ -1460,17 +1475,16 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
             ? (ev.result === "bj" ? 1.6 : 1) + (ev.bonus > 0 ? 0.4 : 0)
             : 0.35);
           if (ev.result === "bj") confettiBurst(ev.seat);
-          // L'ANNONCE D'ARÈNE « BLACKJACK ! » se crie pour TOUTE place de la
-          // table, pas seulement la mienne — comme les confettis, c'est
-          // l'événement de la table. Toujours, jamais autre chose : la seule
-          // réplique de l'intention est ann_blackjack (voir dealer.js), et
-          // `force` + priorité 3 la font passer devant tout. Deux blackjacks
-          // dans la même donne = un seul cri (délai propre de l'intention).
-          // `ev.natural` : blackjack soldé « push » (la banque en a un aussi) —
-          // la main reste un blackjack, le cri part quand même ; seuls les
-          // confettis exigent la victoire.
+          // L'ANNONCE D'ARÈNE « BLACKJACK ! » ne se crie que pour MA place —
+          // le blackjack d'un voisin reste silencieux (confettis seulement).
+          // Toujours, jamais autre chose : la seule réplique de l'intention
+          // est ann_blackjack (voir dealer.js), et `force` + priorité 3 la
+          // font passer devant tout. `ev.natural` : blackjack soldé « push »
+          // (la banque en a un aussi) — la main reste un blackjack, le cri
+          // part quand même ; seuls les confettis exigent la victoire.
           if (ev.result === "bj" || ev.natural) {
-            if (G.seated) voice?.say("blackjack", { delay: 420, force: true });
+            if (G.seated && ev.seat === PLAYER_SEAT)
+              voice?.say("blackjack", { delay: 420, force: true });
           }
         }
 
@@ -1481,8 +1495,8 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
             heat?.gold(true); shockwave(ev.seat, 1);
             cinema?.winPunch(1.25);
             heat?.flashLamp(1.4);
-            // l'annonce « BLACKJACK ! » est criée plus haut, pour toutes les
-            // places — ici seulement la pique, réservée à MON blackjack
+            // l'annonce « BLACKJACK ! » est criée plus haut (ma place
+            // uniquement) — ici seulement la pique, réservée à MON blackjack
             voice?.tease?.("bigWin", { delay: 2800 });
           } else if (ev.result === "win") {
             ui.msg(gainMsg("GAGNÉ", ev) + tag); audio.win(false);

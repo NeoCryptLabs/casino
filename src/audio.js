@@ -325,9 +325,25 @@ export class Audio {
     if (!this.ready) return;
     const ctx = this.ctx;
     if (!this._concertGain) {
+      // Chaîne de LOCALISATION : gain (distance) -> passe-bas (les aigus ne
+      // portent pas, un morceau lointain s'assourdit) -> panoramique (la scène
+      // est à gauche ou à droite selon où l'on regarde). Toujours sur
+      // l'ÉCHANTILLON décodé, rien n'est généré ici.
       this._concertGain = ctx.createGain();
       this._concertGain.gain.value = 0;
-      this._concertGain.connect(this.busAmb);
+      this._concertLp = ctx.createBiquadFilter();
+      this._concertLp.type = "lowpass";
+      this._concertLp.frequency.value = 18000;
+      this._concertGain.connect(this._concertLp);
+      // StereoPannerNode manque aux très vieux navigateurs : on saute alors
+      // l'étage, le concert reste atténué par la distance mais centré.
+      if (ctx.createStereoPanner) {
+        this._concertPan = ctx.createStereoPanner();
+        this._concertLp.connect(this._concertPan);
+        this._concertPan.connect(this.busAmb);
+      } else {
+        this._concertLp.connect(this.busAmb);
+      }
     }
     this._concertOn = !!on;
     // deux musiques à la fois, c'est une musique de trop : l'ambiance de salle
@@ -505,18 +521,39 @@ export class Audio {
   }
 
   /**
-   * Distance joueur -> scène, appelée chaque frame : le concert SORT DE LA
-   * SCÈNE. Comme l'ambiance, il décroît avec la distance et s'éteint au-delà
-   * de sa portée — on doit pouvoir le situer à l'oreille depuis n'importe où
-   * dans la salle. Le lissage évite l'escalier de gain quand on marche.
+   * Position du joueur par rapport à la scène, appelée chaque frame : le
+   * concert SORT DE LA SCÈNE, et on doit pouvoir le situer à l'oreille.
+   * Trois indices, ceux dont l'oreille se sert vraiment :
+   *  - le gain décroît avec la distance et s'éteint au-delà de la portée ;
+   *  - le passe-bas se referme en s'éloignant — de loin, à travers la salle,
+   *    il ne reste d'un morceau que les basses et la voix assourdie ;
+   *  - le panoramique suit l'angle scène/regard : tourner la tête déplace le
+   *    son d'une oreille à l'autre.
+   * `pan` vient de main.js (-1 gauche, +1 droite) — c'est lui qui connaît la
+   * caméra. Tout est lissé : ni escalier de gain en marchant, ni saut de canal
+   * quand la caméra pivote d'un coup.
    */
-  setConcertDistance(d) {
+  setConcertDistance(d, pan = 0) {
     if (!this.ready || !this._concertGain || !this._concertOn || !this._concertSrc) return;
     const RANGE = 30;                // plus loin que l'ambiance : c'est un spectacle
     const target = Math.max(0, 1 - d / RANGE) ** 1.4;
     const cur = this._concertSpace ?? target;
     this._concertSpace = cur + (target - cur) * 0.08;
     this._concertGain.gain.value = 0.6 * this._concertSpace;
+    // aigus pleins à 4 m de la scène, ~900 Hz en bout de portée (échelle log :
+    // c'est comme ça que l'oreille entend une fermeture de filtre)
+    const close = Math.max(0, Math.min(1, 1 - (d - 4) / (RANGE - 4)));
+    this._concertLp.frequency.value = 900 * Math.pow(18000 / 900, close);
+    if (this._concertPan) {
+      // jamais tout à fait collé sur un seul canal : à 100 % d'un côté, la
+      // salle disparaît de l'autre oreille et l'effet devient un défaut. Et
+      // de près, le son s'élargit — on est DANS le spectacle, plus en face.
+      const width = 0.75 * (1 - 0.6 * this._concertSpace);
+      const t = Math.max(-1, Math.min(1, pan)) * width;
+      const p = this._concertPanCur ?? t;
+      this._concertPanCur = p + (t - p) * 0.12;
+      this._concertPan.pan.value = this._concertPanCur;
+    }
   }
 
   // ---------- sons d'action (échantillons uniquement) ----------

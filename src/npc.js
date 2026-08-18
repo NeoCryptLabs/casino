@@ -173,31 +173,36 @@ async function tryLoad(scene, url) {
 export class People {
   static async load(scene, world) {
     const kits = [];
-    const base = B.LoadAssetContainerAsync
-      ? await B.LoadAssetContainerAsync(BASE_MODEL, scene)
-      : await B.SceneLoader.LoadAssetContainerAsync("", BASE_MODEL, scene);
+    // TOUT PART EN MÊME TEMPS. Chargés l'un après l'autre, ces huit .glb
+    // (~45 Mo) additionnaient leurs allers-retours réseau — pour un joueur
+    // distant, c'était l'essentiel du temps passé sur l'écran de chargement.
+    // L'ordre des kits, lui, reste celui d'avant : il est reconstruit après.
+    const [base, opts, avatar, avatarF, singer, dealerC, barmanC] = await Promise.all([
+      B.LoadAssetContainerAsync
+        ? B.LoadAssetContainerAsync(BASE_MODEL, scene)
+        : B.SceneLoader.LoadAssetContainerAsync("", BASE_MODEL, scene),
+      Promise.all(OPTIONAL.map((url) => tryLoad(scene, url))),
+      tryLoad(scene, "assets/player.glb"),
+      tryLoad(scene, "assets/player_f.glb"),
+      tryLoad(scene, "assets/singer.glb"),
+      tryLoad(scene, "assets/dealer.glb"),
+      tryLoad(scene, "assets/barman.glb"),
+    ]);
     kits.push({ url: BASE_MODEL, container: base, male: false, fallback: true });
-    for (const url of OPTIONAL) {
-      const c = await tryLoad(scene, url);
-      if (c) kits.push({ url, container: c, male: IS_MALE.test(url) });
-    }
+    OPTIONAL.forEach((url, i) => {
+      if (opts[i]) kits.push({ url, container: opts[i], male: IS_MALE.test(url) });
+    });
     // Michelle ne sert plus que de filet : dès qu'un figurant dédié est présent
     // dans assets/, elle disparaît de la salle. Elle reste chargée — son
     // matériau nourrit la tenue de service (_prepareUniform) et elle rattrape
     // un déploiement où tous les .glb optionnels manqueraient.
     if (kits.length > 1) kits[0].hidden = true;
-    // Personnel : modèles dédiés, modelés et riggés à part (squelette Mixamo,
-    // poids automatiques). `staff: role` réserve le kit à ce poste, pour qu'un
-    // client ne se retrouve jamais habillé en croupier. Repli sur le mannequin
-    // procédural si le .glb manque.
     // Avatar des joueurs distants : modèle dédié, porteur des clips idle/walk/sit.
     // Sans lui on retombe sur le modèle importé, qui n'a aucune animation.
-    const avatar = await tryLoad(scene, "assets/player.glb");
     if (avatar) kits.push({ url: "assets/player.glb", container: avatar, male: true, avatar: true });
     else console.info("[casino] assets/player.glb absent : avatars sans animation");
     // Avatar féminin : même contrat que player.glb (rig mixamorig + clips
     // idle/walk). Chaque joueur distant tire l'un des deux kits au sort.
-    const avatarF = await tryLoad(scene, "assets/player_f.glb");
     if (avatarF) kits.push({ url: "assets/player_f.glb", container: avatarF, male: false, avatar: true });
     else console.info("[casino] assets/player_f.glb absent : avatars tous masculins");
 
@@ -205,12 +210,14 @@ export class People {
     // `player.glb` : elle hérite donc de ses clips `idle`/`walk`. Sans ce
     // fichier, le concert retombe sur le modèle féminin de base, qui ne porte
     // aucune animation — c'est ce qui la faisait glisser jusqu'au micro.
-    const singer = await tryLoad(scene, "assets/singer.glb");
     if (singer) kits.push({ url: "assets/singer.glb", container: singer, male: false, singer: true });
     else console.info("[casino] assets/singer.glb absent : chanteuse sans animation");
 
-    for (const [role, file] of [["dealer", "assets/dealer.glb"], ["bar", "assets/barman.glb"]]) {
-      const c = await tryLoad(scene, file);
+    // Personnel : modèles dédiés, modelés et riggés à part (squelette Mixamo,
+    // poids automatiques). `staff: role` réserve le kit à ce poste, pour qu'un
+    // client ne se retrouve jamais habillé en croupier. Repli sur le mannequin
+    // procédural si le .glb manque.
+    for (const [role, file, c] of [["dealer", "assets/dealer.glb", dealerC], ["bar", "assets/barman.glb", barmanC]]) {
       if (!c) console.info("[casino] " + file + " introuvable : mannequin de repli pour " + role);
       kits.push({
         url: c ? file : "procedural:" + role,
@@ -255,11 +262,13 @@ export class People {
       // perf : la micro-pose (respiration, regard) est invisible de loin. Au
       // delà de 14 m on ne l'évalue qu'une frame sur trois, en cumulant dt
       // pour garder la même vitesse de geste — les quaternions par os ne se
-      // paient qu'autour du joueur.
+      // paient qu'autour du joueur. EXCEPTION : un PNJ qui tient un objet
+      // (`_hold`, la chanteuse au micro) — le clip réécrit les bras à chaque
+      // image, sauter des poses fait battre les bras entre clip et prise.
       const cam = scene.activeCamera;
       const eye = cam && cam.globalPosition;
       for (const n of this.list) {
-        if (eye) {
+        if (eye && !n._hold) {
           const dx = n.root.position.x - eye.x, dz = n.root.position.z - eye.z;
           if (dx * dx + dz * dz > 14 * 14) {
             n._poseAcc = (n._poseAcc || 0) + dt;

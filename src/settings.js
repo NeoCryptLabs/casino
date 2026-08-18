@@ -11,7 +11,11 @@
  * ctx = { engine, scene, player, world, pipe, ssao, audio, heat, net }
  */
 
+import { WINDOWS } from "./util.js";
+
 const STORE = "mirage.settings.v1";
+// marqueur du recalage Windows (voir constructeur) : posé une fois, jamais relu
+const WIN_TUNED = "mirage.winTuned.v1";
 
 export const GROUPS = [
   { id: "image", label: "IMAGE" },
@@ -28,7 +32,9 @@ export const DEFS = [
   {
     key: "resolution", group: "image", type: "enum",
     label: "Qualité de rendu", hint: "résolution interne",
-    def: 1.25,
+    // Windows : GPU intégrés fréquents + rendu via ANGLE/D3D — on part de
+    // NORMALE (le joueur peut toujours remonter dans ce menu)
+    def: WINDOWS ? 1 : 1.25,
     options: [
       { v: 0.75, label: "BASSE" },
       { v: 1, label: "NORMALE" },
@@ -42,7 +48,7 @@ export const DEFS = [
   {
     key: "shadows", group: "image", type: "enum",
     label: "Ombres", hint: "lustres, projecteurs, table",
-    def: "high",
+    def: WINDOWS ? "low" : "high",
     options: [
       { v: "off", label: "AUCUNE" },
       { v: "low", label: "BASSES" },
@@ -65,7 +71,7 @@ export const DEFS = [
   {
     key: "ssao", group: "image", type: "toggle",
     label: "Occlusion ambiante", hint: "contact au sol, coûteux",
-    def: true,
+    def: !WINDOWS,
     apply(v, ctx) {
       const { scene, ssao, player } = ctx;
       if (!ssao) return;
@@ -262,7 +268,23 @@ class Settings {
         const d = byKey.get(k);
         if (d) this.values[k] = sanitize(d, v);
       }
+      /**
+       * RECALAGE WINDOWS, une seule fois. `_save()` fige TOUTES les valeurs —
+       * y compris les défauts jamais touchés : taper son pseudo suffisait à
+       * graver « HAUTE / ombres hautes / SSAO » dans le navigateur. Les
+       * joueurs Windows existants n'auraient donc jamais vu les nouveaux
+       * défauts. On les leur repose ici (vers le bas seulement), puis on pose
+       * le marqueur : leurs choix ultérieurs ne seront plus jamais écrasés.
+       */
+      if (WINDOWS && !localStorage.getItem(WIN_TUNED)) {
+        localStorage.setItem(WIN_TUNED, "1");
+        this.values.resolution = Math.min(this.values.resolution, 1);
+        if (this.values.shadows === "high") this.values.shadows = "low";
+        this.values.ssao = false;
+        this._saveSoon = true;
+      }
     } catch { /* stockage indisponible : on garde les défauts */ }
+    if (this._saveSoon) { delete this._saveSoon; this._save(); }
     this.ctx = null;
     this._subs = new Set();
   }

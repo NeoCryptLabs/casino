@@ -1,5 +1,5 @@
 /** LE MIRAGE — casino 3D temps réel (Babylon.js 8 + Havok). Point d'entrée. */
-import { V3, C3, fmt, wait, clamp } from "./util.js";
+import { V3, C3, fmt, wait, clamp, WINDOWS } from "./util.js";
 import { buildWorld, raiseLightLimit, LAYOUT } from "./world.js";
 import { buildFountain } from "./fountain.js";
 import { buildSlots } from "./slots.js";
@@ -63,7 +63,16 @@ async function boot() {
     stencil: true, antialias: true, powerPreference: "high-performance",
     preserveDrawingBuffer: false,
   });
-  engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio || 1, 1.25));
+  // même plafond que le défaut du réglage « Qualité de rendu » (settings.js) :
+  // 1.25 sur Mac, 1 sur Windows — là-bas le GPU est déjà au tapis sans ça
+  engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio || 1, WINDOWS ? 1 : 1.25));
+  // la carte et le pilote, en clair dans la console ET dans le dump dev :
+  // c'est ce qui permet de diagnostiquer « lent chez lui » sans sa machine
+  try {
+    const gl = engine.getGlInfo();
+    window.__gpu = gl;
+    console.info("[gpu]", gl.renderer, "|", gl.version);
+  } catch { /* info indisponible : sans conséquence */ }
 
   const scene = new B.Scene(engine);
   scene.collisionsEnabled = true;
@@ -179,7 +188,7 @@ async function boot() {
 
   // ---- post-traitement ----
   const pipe = new B.DefaultRenderingPipeline("pipe", true, scene, [player.camera]);
-  pipe.samples = 4;
+  pipe.samples = WINDOWS ? 2 : 4;   // le MSAA ×4 coûte cher aux GPU intégrés
   pipe.fxaaEnabled = true;
   // Bloom RETENU. Il était généreux (seuil 0,82 / poids 0,34) et nappait tout
   // ce qui était un peu clair — badges, dorures, reflets du feutre — au point
@@ -248,12 +257,21 @@ async function boot() {
       m.isVisible && m.isEnabled() && m.material &&
       !/^(card|chip|sheet|waterSurf|w2|w3)/.test(m.name))
   );
-  probe.refreshRate = 1;
+  // une frame sur trois pendant l'échauffement : chaque rendu de sonde, c'est
+  // la salle entière ×6 faces — à cadence 1, elle triplait le coût des
+  // premières secondes, celles où tout compile déjà. Le résultat figé est le
+  // même : seule la DERNIÈRE passe avant le gel compte.
+  probe.refreshRate = 3;
   scene.environmentTexture = probe.cubeTexture;
   scene.environmentIntensity = 1.95;
   setTimeout(() => { probe.refreshRate = B.RenderTargetTexture.REFRESHRATE_RENDER_ONCE; }, 1500);
 
-  raiseLightLimit(scene, 12);  // pit (2) + scène (2) + restaurant/VIP/caisse
+  // pit (2) + scène (2) + restaurant/VIP/caisse. Sur Windows, 8 : le sol — un
+  // triangle unique touché par les 10 lumières ET les 6 cartes d'ombres —
+  // engendrait un shader que le compilateur D3D d'ANGLE mettait des secondes à
+  // avaler, quand il n'abandonnait pas (salle sans éclairage). À 8, seuls les
+  // derniers spots sans ombre (restaurant/VIP/caisse) lâchent le sol.
+  raiseLightLimit(scene, WINDOWS ? 8 : 12);
 
   // LA CHALEUR — le multiplicateur de série rendu comme un incendie. Créée ici
   // et pas avec la table : elle a besoin de la caméra du joueur (distorsion,
@@ -469,6 +487,7 @@ async function boot() {
   // le concert émet ses intentions vers le serveur ; sans liaison, il retombe
   // sur sa machine locale et le jeu reste jouable seul
   concert.bind(net);
+  editor.bind(net);                // l'éditeur (F2/P) n'ouvre qu'en dev
   net.connect();
 
   /* ------------------------------------------------------------- debug */
@@ -492,7 +511,7 @@ async function boot() {
     }
   }
   window.__dev = window.__dev || {};
-  window.__dev.dump = () => DBGBUF.join("\n");
+  window.__dev.dump = () => "[gpu] " + (window.__gpu?.renderer || "?") + "\n" + DBGBUF.join("\n");
 
   // battement de coeur du déplacement : position/FPS/intention toutes les 3 s
   let _hb = 0;
@@ -608,6 +627,8 @@ async function boot() {
     menu.tick(dt);                 // la ronde de caméra de l'écran-titre
     player.update(dt);
     const p = player.position;
+    // tant que la ronde possède la caméra, on n'émet pas de pose (voir _send)
+    net.ghost = menu.drifting;
     net.tick(dt, state.spot, state.safePos);
 
     for (const m of machines) m.tick(dt, p);
@@ -622,7 +643,21 @@ async function boot() {
     stage.tick(dt);
     concert.tick(dt, p);
     jackpot.tick(dt);
-    audio.setConcertDistance(B.Vector3.Distance(p, stage.center()));
+    // LOCALISATION du concert : distance ET côté. Le panoramique est la
+    // projection de la direction de la scène sur l'axe droit de la caméra
+    // (-1 plein gauche, +1 plein droit) — tourner la tête déplace le chant
+    // d'une oreille à l'autre, c'est ce qui permet de le situer sans le voir.
+    {
+      const sc = stage.center();
+      const toStage = sc.subtract(p); toStage.y = 0;
+      const L = toStage.length();
+      let pan = 0;
+      if (L > 0.5) {
+        const right = player.camera.getDirection(B.Axis.X); right.y = 0; right.normalize();
+        pan = B.Vector3.Dot(toStage.scale(1 / L), right);
+      }
+      audio.setConcertDistance(B.Vector3.Distance(p, sc), pan);
+    }
     // L'ambiance vit sur la scène quand on se balade, et devient un fond
     // général dès qu'on s'assied à une table. L'écran-titre est global lui
     // aussi : c'est là qu'on choisit la piste, elle ne peut pas y être

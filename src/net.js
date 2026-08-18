@@ -53,6 +53,9 @@ export class Net {
     this.scene = o.scene;
     this.people = o.people;
     this.player = o.player;
+    // fantôme jusqu'à preuve du contraire : main.js recale le drapeau à chaque
+    // frame, mais la relance de 2 s peut partir avant la toute première
+    this.ghost = true;
     this.onCount = o.onCount || (() => { });
     // Résout un identifiant de place ("blackjack:2") en position monde de la
     // CHAISE. Indispensable : on transmet la position de la caméra, or en
@@ -230,11 +233,55 @@ export class Net {
         break;
       case "rename": {
         const peer = this.peers.get(m.id);
-        if (peer) peer.name = m.name;
+        if (peer) { peer.name = m.name; this._tagText(peer); }
         break;
       }
     }
     this.onCount(this.peers.size + 1);
+  }
+
+  /**
+   * ÉTIQUETTE DE PSEUDO au-dessus de l'avatar : pastille sombre, texte clair,
+   * en billboard — repositionnée à chaque frame par `tick` (pas parentée à
+   * l'avatar : le billboard se marie mal avec un parent qui pivote).
+   */
+  _tag(peer) {
+    if (peer.tag || !this.scene) return;
+    const dt = new B.DynamicTexture("tagT", { width: 512, height: 128 }, this.scene, false);
+    dt.hasAlpha = true;
+    const mat = new B.StandardMaterial("tagM", this.scene);
+    mat.emissiveTexture = dt;
+    mat.opacityTexture = dt;
+    mat.disableLighting = true;
+    mat.backFaceCulling = false;
+    mat.disableDepthWrite = true;
+    const plane = B.MeshBuilder.CreatePlane("tagP", { width: 0.6, height: 0.15 }, this.scene);
+    plane.material = mat;
+    plane.billboardMode = B.AbstractMesh.BILLBOARDMODE_ALL;
+    plane.isPickable = false;
+    peer.tag = { plane, dt, txt: null };
+    this._tagText(peer);
+  }
+
+  /** (Re)dessine le pseudo — appelé à la création et sur `rename`. */
+  _tagText(peer) {
+    if (!peer.tag) return;
+    const name = String(peer.name || "Joueur").slice(0, 24);
+    if (peer.tag.txt === name) return;
+    peer.tag.txt = name;
+    const c = peer.tag.dt.getContext();
+    c.clearRect(0, 0, 512, 128);
+    c.font = "600 52px 'Futura','Avenir Next',sans-serif";
+    const w = Math.min(500, c.measureText(name).width + 52);
+    c.fillStyle = "rgba(8,8,12,.68)";
+    c.beginPath();
+    c.roundRect((512 - w) / 2, 24, w, 80, 40);
+    c.fill();
+    c.fillStyle = "#f2e7c8";
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.fillText(name, 256, 66);
+    peer.tag.dt.update();
   }
 
   /** Crée ou met à jour l'avatar d'un joueur distant. */
@@ -265,9 +312,11 @@ export class Net {
       peer.placed = true;
       peer.npc.root.position.set(peer.target.p.x, 0, peer.target.p.z);
       peer.npc.root.setEnabled(true);
+      this._tag(peer);
     }
     peer.target.r = p.r;
     peer.name = p.name ?? peer.name;
+    this._tagText(peer);
     peer.spot = p.spot ?? null;
 
     // assis / debout : on rejoue la pose localement plutôt que de la transmettre
@@ -354,6 +403,9 @@ export class Net {
     const peer = this.peers.get(id);
     if (!peer) return;
     try { peer.npc.dispose(); } catch (e) { }
+    if (peer.tag) {
+      try { peer.tag.dt.dispose(); peer.tag.plane.material.dispose(); peer.tag.plane.dispose(); } catch (e) { }
+    }
     this.peers.delete(id);
   }
 
@@ -410,6 +462,12 @@ export class Net {
         // relancerait la tentative à chaque frame
         peer.clip = want;
       }
+
+      // l'étiquette suit : plus bas quand il est assis (la tête descend)
+      if (peer.tag) {
+        peer.tag.plane.position.set(r.position.x,
+          r.position.y + (peer.spot ? 1.62 : 2.02), r.position.z);
+      }
     }
 
     this._spot = spot ?? null;
@@ -426,6 +484,12 @@ export class Net {
    */
   _send(force) {
     if (!this.connected || this.ws?.readyState !== 1) return;
+    // MODE FANTÔME (écran-titre) : la caméra appartient à la ronde du menu,
+    // pas au joueur — émettre sa position ferait apparaître un avatar au sol
+    // sous la caméra volante chez les autres. Tant que rien n'est annoncé, le
+    // serveur garde la pose à l'origine et l'avatar n'existe pour personne ;
+    // c'est main.js qui lève le drapeau à chaque frame (menu.drifting).
+    if (this.ghost) return;
     const cam = this.player?.camera;
     if (!cam) return;
     const p = cam.position;

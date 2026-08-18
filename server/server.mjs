@@ -12,6 +12,7 @@
  * repart de zéro au redémarrage.
  */
 import { createServer } from "node:http";
+import { gzipSync } from "node:zlib";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,6 +46,13 @@ const MIME = {
 
 /* ------------------------------------------------------------ fichiers du jeu */
 
+// Types qui valent la peine d'être compressés (les mp3/png/jpg le sont déjà).
+// Les .glb gagnent 30-60 % : géométrie et JSON s'y compressent très bien.
+const COMPRESSIBLE = new Set([".html", ".js", ".mjs", ".css", ".json", ".svg", ".glb", ".wasm"]);
+// gzip d'un .glb de 11 Mo = ~200 ms de CPU : on ne le paie qu'une fois par
+// version de fichier, le résultat reste en mémoire (clé = chemin, version = etag).
+const gzCache = new Map();
+
 /** Sert un fichier du dépôt, en refusant toute sortie de l'arborescence. */
 async function serveGameFile(req, res) {
   const url = new URL(req.url, "http://x");
@@ -59,13 +67,29 @@ async function serveGameFile(req, res) {
   try {
     const st = await stat(target);
     if (!st.isFile()) return false;
-    const body = await readFile(target);
-    res.writeHead(200, {
+    const etag = `"${st.size.toString(16)}-${Math.round(st.mtimeMs).toString(16)}"`;
+    const headers = {
       "content-type": MIME[extname(target)] || "application/octet-stream",
-      "content-length": body.length,
-      // le jeu évolue à chaque rechargement pendant le dev
-      "cache-control": dev ? "no-store" : "public, max-age=300",
-    });
+      etag,
+      // `no-cache` et pas `no-store` : le navigateur GARDE le fichier et ne
+      // demande que « a-t-il changé ? » (304). Avec no-store, chaque visite
+      // re-téléchargeait l'intégralité des assets — 90 Mo de .glb et de sons.
+      "cache-control": dev ? "no-cache" : "public, max-age=300",
+    };
+    if (req.headers["if-none-match"] === etag) {
+      res.writeHead(304, headers).end();
+      return true;
+    }
+    let body = await readFile(target);
+    const ext = extname(target);
+    if (COMPRESSIBLE.has(ext) && /\bgzip\b/.test(req.headers["accept-encoding"] || "")) {
+      const hit = gzCache.get(target);
+      body = hit?.etag === etag ? hit.buf
+        : (gzCache.set(target, { etag, buf: gzipSync(body) }), gzCache.get(target).buf);
+      headers["content-encoding"] = "gzip";
+    }
+    headers["content-length"] = body.length;
+    res.writeHead(200, headers);
     res.end(body);
     return true;
   } catch {

@@ -10,6 +10,15 @@ export const lerp = (a, b, t) => a + (b - a) * t;
 export const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 export const fmt = (n) => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 
+/**
+ * WINDOWS : là-bas WebGL passe par ANGLE/Direct3D, dont le compilateur de
+ * shaders est des ordres de grandeur plus lent que Metal — un matériau touché
+ * par 10 lumières et 6 cartes d'ombres PCF y met des SECONDES à compiler (gel
+ * au chargement, éclairage absent tant que le shader n'est pas prêt). Les
+ * budgets lumière/ombre/échantillonnage se réduisent donc sur cette plateforme.
+ */
+export const WINDOWS = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+
 /** PBR material factory with sane defaults. */
 export function pbr(name, scene, opt = {}) {
   const m = new B.PBRMetallicRoughnessMaterial(name, scene);

@@ -1,5 +1,5 @@
 /** Architecture du casino : sol, murs, plafond, piliers, lustres, éclairage. */
-import { V3, C3, pbr, gold, canvasTex, normalMap, rnd, rndInt, merge } from "./util.js";
+import { V3, C3, pbr, gold, canvasTex, normalMap, rnd, rndInt, merge, WINDOWS } from "./util.js";
 const B = BABYLON;
 
 /**
@@ -149,9 +149,13 @@ export function buildWorld(scene) {
     const s = new B.SpotLight(name, pos, dir, angle, 6, scene);
     s.intensity = intens; s.diffuse = color; s.specular = color; s.range = range;
     if (shadows) {
-      const sg = new B.ShadowGenerator(1024, s);
+      // Windows/ANGLE : chaque carte d'ombre alourdit le shader de TOUT
+      // matériau qu'elle touche — cartes plus petites et PCF minimal, sinon la
+      // compilation D3D gèle le chargement (voir WINDOWS dans util.js).
+      const sg = new B.ShadowGenerator(WINDOWS ? 512 : 1024, s);
       sg.usePercentageCloserFiltering = true;
-      sg.filteringQuality = B.ShadowGenerator.QUALITY_MEDIUM;
+      sg.filteringQuality = WINDOWS
+        ? B.ShadowGenerator.QUALITY_LOW : B.ShadowGenerator.QUALITY_MEDIUM;
       sg.bias = 0.00035; sg.normalBias = 0.012;
       sg.darkness = 0.28;
       shadowGens.push(sg);
