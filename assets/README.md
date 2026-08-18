@@ -1,3 +1,20 @@
+# Figurants (`male.glb`, `male2.glb`, `female2.glb`, `female3.glb`)
+
+Les clients de la salle tirent leur silhouette dans ces fichiers. Dès qu'au
+moins un est présent, la Michelle de three.js (afro, lunettes) ne sert plus que
+de filet de sécurité : elle reste chargée mais n'apparaît plus en salle.
+
+- `male.glb` — homme en gilet bleu nuit : maillage du barman (Rodin) re-habillé
+  (sortie de `tools/build-avatars.py`).
+- `male2.glb` / `female2.glb` — personnages par défaut de la Ready Player Me
+  Animation Library (github.com/readyplayerme/animation-library, usage
+  personnel/commercial autorisé). Squelette Mixamo sans préfixe — `node()`
+  matche par suffixe, ça suffit. Pas de clips : les figurants sont posés
+  procéduralement, ils n'en ont pas besoin.
+
+Contrat : squelette Mixamo (avec ou sans préfixe `mixamorig:`), T-pose ou
+A-pose, pas d'animation nécessaire.
+
 # Modèle masculin (optionnel)
 
 Déposez ici un fichier **`male.glb`** : un personnage rigué au format glTF
@@ -41,9 +58,11 @@ Les joueurs distants tirent au sort l'un des deux. Contrat commun : os au
 suffixe Mixamo (`…Hips`, `…LeftArm`, peu importe le préfixe) **et clips
 `idle`/`walk`** (sans eux l'avatar glisse au lieu de marcher).
 
-- `player.glb` — homme en gilet bleu nuit : maillage du barman (Rodin) re-habillé
-  et porteur des clips de l'ancien Xbot, retargetés par visée de direction.
-  L'ancien Xbot Mixamo reste récupérable dans l'historique git.
-- `player_f.glb` — femme en robe émeraude : `singer.glb` re-habillé, clips inclus.
+- `player.glb` — LE PANTIN : le Xbot Mixamo d'origine, restauré. Les joueurs
+  distants sont des pantins, c'est voulu — les personnages habillés sont
+  réservés aux figurants et au personnel. (L'homme au gilet re-habillé vit
+  désormais en salle : `male.glb`.)
+- `player_f.glb` — absent volontairement : tout le monde tirait la variante
+  issue de `singer.glb` et la salle se remplissait de sosies de la chanteuse.
 
 Fabrique des deux : `tools/build-avatars.py` (à lancer dans Blender).
