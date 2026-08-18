@@ -40,6 +40,9 @@ const CLIP_RATIO = WALK_SPEED / CLIP_SPEED;
 // `server/concert.mjs` : le serveur fait autorité, ces valeurs ne servent qu'à
 // tenir le spectacle debout quand la liaison est coupée.
 const DUR = {
+  // `announce` n'est qu'un repli : le serveur envoie la durée RÉELLE de
+  // l'annonce parlée (`intro`), pour que le rideau ne s'ouvre jamais sur une
+  // voix qui parle encore.
   announce: 3.6, opening: 2.0, entering: 4.2,
   performing: 0,                  // = durée du morceau, connue du serveur
   bow: 2.6, leaving: 3.8, closing: 2.2,
@@ -57,9 +60,11 @@ export function createConcert({ scene, stage, people, audio }) {
   let baseYaw = 0;
   let net = null;                  // liaison serveur, posée par main.js
   let songLen = 0;                 // durée du morceau, annoncée par le serveur
+  let introLen = 0;                // durée de l'annonce parlée, idem
   let mouth;                       // cible de morph « bouche ouverte » (undefined = pas cherchée)
   let mouthMgr = null;             // son gestionnaire, pour la sonde
   let mouthT = 0;                  // son influence lissée
+  let introReady = false;          // annonce parlée déjà préchargée ?
   // Réglage de la PRISE, ajustable en jeu par `__dev.grip(...)`. Les décalages
   // sont en local scène (x latéral, y hauteur, z vers le mur) ; `curl` ferme
   // les doigts, `pole` est l'axe de l'objet tenu — vertical pour un pied de
@@ -380,6 +385,7 @@ export function createConcert({ scene, stage, people, audio }) {
     applyServer(st) {
       if (!st || typeof st.phase !== "string") return;
       songLen = (st.song || 0) / 1000;
+      introLen = (st.intro || 0) / 1000;
       const elapsed = Math.max(0, (st.since || 0) / 1000);
       if (st.phase === state && state !== "idle") {
         // même phase : on se contente de recaler l'horloge, sans rejouer
@@ -398,6 +404,9 @@ export function createConcert({ scene, stage, people, audio }) {
         || state === "bow" || state === "leaving";
       stage.follow?.(
         lit && singer ? singer.root.position.add(V3(0, 1.15, 0)) : null, lit, dt);
+      // l'annonce est préchargée dès que le son est disponible : demandée à
+      // froid, son décodage la ferait arriver en retard sur sa propre phase
+      if (!introReady && audio.ready) { audio.preloadVoice?.("annonce_concert"); introReady = true; }
       if (state === "idle") return;
       t += dt;
       stateT += dt;
@@ -406,7 +415,9 @@ export function createConcert({ scene, stage, people, audio }) {
       // Avec un serveur, les transitions arrivent par `applyServer` : les
       // clients restent alors rigoureusement en phase entre eux.
       if (this.solo) {
-        const d = state === "performing" ? (songLen || audio.concertLength?.() || 0) : DUR[state];
+        const d = state === "performing" ? (songLen || audio.concertLength?.() || 0)
+          : state === "announce" ? (introLen || DUR.announce)
+          : DUR[state];
         if (d && stateT >= d) { enter(NEXT[state]); return; }
       }
 

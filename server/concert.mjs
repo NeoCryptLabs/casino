@@ -72,7 +72,7 @@ const NEXT = {
   closing: "idle",
 };
 const DUR = {
-  announce: 3600,   // l'annonce se pose avant que le rideau bouge
+  announce: 3600,   // repli seul : remplacé par la durée réelle de l'annonce
   opening: 2000,    // le velours est lourd (ressort amorti côté client)
   entering: 4200,   // des coulisses au micro : 3,35 m à 0,95 m/s, marge comprise
   performing: 0,    // remplacé par la durée du morceau
@@ -85,18 +85,30 @@ export class Concert {
   /**
    * @param {(msg:object)=>void} send diffusion à tous les clients
    * @param {string} songPath chemin du morceau chanté
+   * @param {string} introPath annonce parlée qui ouvre le spectacle
    */
-  constructor(send, songPath) {
+  constructor(send, songPath, introPath) {
     this.send = send;
     this.song = Math.round(mp3Duration(songPath) * 1000) || 180000;
+    // L'ANNONCE COMMANDE SA PROPRE PHASE. Elle était calée sur 3,6 s en dur
+    // alors que le fichier en fait 4,2 : le rideau s'ouvrait pendant qu'on
+    // parlait encore, et la voix se poursuivait sur l'entrée en scène de la
+    // chanteuse — on croyait l'entendre PARLER avant de chanter. La phase dure
+    // donc l'annonce, plus une demi-seconde de silence avant que le velours
+    // bouge. Un fichier de voix remplacé recale tout, sans toucher au code.
+    const intro = Math.round(mp3Duration(introPath) * 1000);
+    this.intro = intro ? intro + 600 : DUR.announce;
     this.phase = "idle";
     this.t0 = Date.now();
     this.by = null;
-    console.log(`[concert] morceau : ${(this.song / 1000).toFixed(1)} s`);
+    console.log(`[concert] morceau : ${(this.song / 1000).toFixed(1)} s`
+      + ` | annonce : ${(this.intro / 1000).toFixed(1)} s`);
   }
 
   _dur(phase = this.phase) {
-    return phase === "performing" ? this.song : (DUR[phase] || 0);
+    if (phase === "performing") return this.song;
+    if (phase === "announce") return this.intro;
+    return DUR[phase] || 0;
   }
 
   /** Photo diffusable. `since` permet à un arrivant de tomber au bon endroit. */
@@ -106,6 +118,7 @@ export class Concert {
       since: this.phase === "idle" ? 0 : Date.now() - this.t0,
       dur: this._dur(),
       song: this.song,
+      intro: this.intro,
       by: this.by,
     };
   }

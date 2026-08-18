@@ -2,16 +2,29 @@
 import { V3, C3, pbr, gold, canvasTex, normalMap, rnd, rndInt, merge } from "./util.js";
 const B = BABYLON;
 
+/**
+ * Disposition « Casino Le Royal Monaco » — voir PLAN_CASINO_MONACO.md et
+ * design_handoff_casino_royal_monaco/README.md (source de vérité, mètres,
+ * origine au centre de la fontaine, entrée au +Z, fond de salle au −Z).
+ *
+ * MIROIR EN X par rapport aux coordonnées du handoff : la référence est en
+ * three.js (repère main-droite), Babylon est main-gauche. À coordonnées
+ * égales, tout ce que le plan met à droite du visiteur passerait à sa gauche.
+ * On négative donc les x asymétriques — l'EXPÉRIENCE (machines à droite en
+ * entrant, pit et scène à gauche, VIP au fond à droite) est celle du handoff.
+ */
 export const LAYOUT = {
-  hall: { w: 44, d: 34, h: 8.5 },
-  fountain: V3(0, 0, -1),
-  bar: { x: 0, z: -14.2, w: 13 },
-  // le « pit » : trois tables de blackjack alignées le long du mur +X
-  blackjack: V3(12.5, 0, 6),
-  blackjack1: V3(12.5, 0, -1.5),
-  blackjack2: V3(12.5, 0, -9),
-  stage: V3(21.72, 0, 0.5),   // SOUDÉE au mur +X : la baie est ouverte autour
-  spawn: V3(0, 1.62, 14.5),
+  hall: { w: 52, d: 39, h: 6.5 },
+  fountain: V3(0, 0, -0.8),
+  bar: { x: 0, z: -17.6, w: 9.4 },     // fond d'axe, face à l'entrée
+  // le « pit » : trois tables de blackjack le long du mur +X, la scène derrière
+  blackjack: V3(16.6, 0, 3.6),
+  blackjack1: V3(16.6, 0, -1.6),
+  blackjack2: V3(16.6, 0, 8.8),
+  // SOUDÉE au mur +X (x = hall.w/2 - 0.05) : `stage.js` recale de toute façon
+  // cet axe sur le plan du mur, seul le z (position le long du mur) est libre
+  stage: V3(25.95, 0, 3.6),
+  spawn: V3(0, 1.62, 15),
   // LE MICRO ET LA CHANTEUSE, en MONDE : place de l'artiste, prise de la main
   // haute (corps du micro) et de la main basse (fût). À zéro = non réglés,
   // `stage.js` y pose alors les valeurs déduites du pied qu'il construit. Ils
@@ -19,7 +32,18 @@ export const LAYOUT = {
   singerSpot: V3(0, 0, 0),
   micHigh: V3(0, 0, 0),
   micLow: V3(0, 0, 0),
-  slots: { x0: -17.5, z0: -9, rows: 2, per: 6 },
+  // trois épines dos-à-dos à droite du visiteur (−X) : 9 par face = 54 postes
+  slots: { x0: -22.4, z0: -5.6, rows: 3, per: 9 },
+  // les zones du handoff, bâties par venues.js
+  // handoff : ∓6,4 — écartées à ∓7,0 pour laisser 1,5 m entre bassin et table
+  roulette1: V3(-7.0, 0, -0.8),
+  roulette2: V3(7.0, 0, -0.8),
+  restaurant: { xs: [20.5, 16.0, 11.5, 7.0], z: 15.4 },
+  cashier: V3(-18.8, 0, 15.6),
+  // aligné sur la caisse (retour utilisateur 18/08) : les deux comptoirs
+  // tiennent la même ligne z, dos au mur +Z avec leur couloir de service
+  cloakroom: V3(-10.1, 0, 15.6),
+  vip: V3(-18.6, 0, -13.4),
 };
 
 /* --------------------------------------------------------------- textures */
@@ -59,8 +83,8 @@ function carpetTexture(scene) {
   }, { uScale: 9, vScale: 7 });
 }
 
-function marbleTexture(scene, light = false) {
-  return canvasTex(light ? "marbleL" : "marble", scene, 1024, 1024, (c, w, h) => {
+function marbleTexture(scene, light = false, name = null, uScale = 3, vScale = 3) {
+  return canvasTex(name || (light ? "marbleL" : "marble"), scene, 1024, 1024, (c, w, h) => {
     c.fillStyle = light ? "#d9d2c4" : "#1a1a1f"; c.fillRect(0, 0, w, h);
     for (let i = 0; i < 90; i++) {
       c.beginPath();
@@ -77,7 +101,7 @@ function marbleTexture(scene, light = false) {
       c.fillStyle = light ? `rgba(255,252,246,${rnd(0.05, 0.16)})` : `rgba(255,250,240,${rnd(0.008, 0.03)})`;
       c.fill();
     }
-  }, { uScale: 3, vScale: 3 });
+  }, { uScale, vScale });
 }
 
 function panelTexture(scene) {
@@ -138,14 +162,18 @@ export function buildWorld(scene) {
 
   const lights = {
     table: spot("lTable", V3(LAYOUT.blackjack.x, 4.2, LAYOUT.blackjack.z), V3(0, -1, 0), 1.15, 65, C3(1, 0.88, 0.66), 14),
-    bar: spot("lBar", V3(LAYOUT.bar.x, 4.4, LAYOUT.bar.z + 1.6), V3(0, -1, -0.25), 1.5, 62, C3(1, 0.72, 0.42), 16),
+    bar: spot("lBar", V3(LAYOUT.bar.x, 4.7, LAYOUT.bar.z + 2.6), V3(0, -1, 0.10), 1.5, 74, C3(1, 0.72, 0.42), 19),
     fountain: spot("lFtn", V3(LAYOUT.fountain.x, 6.5, LAYOUT.fountain.z), V3(0, -1, 0), 1.25, 52, C3(0.8, 0.9, 1), 18),
-    slots: spot("lSlots", V3(-12, 5.5, 0), V3(0.25, -1, 0), 1.5, 70, C3(1, 0.72, 0.5), 22),
+    slots: spot("lSlots", V3(-13, 5.6, 1.2), V3(-0.35, -1, 0), 1.5, 70, C3(1, 0.72, 0.5), 24),
     // les deux tables du pit, ajoutées EN FIN de littéral : l'ordre des
     // shadowGens (le [0] = table principale, rafraîchi chaque frame) est un
     // contrat que d'autres modules utilisent — on ne l'altère pas
     table1: spot("lTable1", V3(LAYOUT.blackjack1.x, 4.2, LAYOUT.blackjack1.z), V3(0, -1, 0), 1.15, 65, C3(1, 0.88, 0.66), 14),
     table2: spot("lTable2", V3(LAYOUT.blackjack2.x, 4.2, LAYOUT.blackjack2.z), V3(0, -1, 0), 1.15, 65, C3(1, 0.88, 0.66), 14),
+    // les zones du handoff — sans ombre : le budget de shadowGens reste au pit
+    dining: spot("lDining", V3(13.5, 4.6, LAYOUT.restaurant.z), V3(0, -1, 0), 1.5, 42, C3(1, 0.78, 0.5), 18, false),
+    vip: spot("lVip", V3(LAYOUT.vip.x, 4.4, LAYOUT.vip.z), V3(0, -1, 0), 1.2, 46, C3(1, 0.84, 0.58), 15, false),
+    cashier: spot("lCash", V3(LAYOUT.cashier.x, 4.3, LAYOUT.cashier.z - 3.6), V3(0, -0.6, 0.85), 1.15, 58, C3(1, 0.8, 0.52), 16, false),
   };
 
   const glow = new B.GlowLayer("glow", scene, { blurKernelSize: 64 });
@@ -192,17 +220,26 @@ export function buildWorld(scene) {
       [(x + hall.w / 2) / hall.w, (z + hall.d / 2) / hall.d]);
     vd.applyToMesh(floor);
   }
-  const carpetMat = pbr("carpetM", scene, { color: C3(1, 1, 1), roughness: 0.94 });
-  carpetMat.baseTexture = carpetTexture(scene);
-  const carpetN = normalMap("carpetN", scene, 256, 26, 3.4);
-  carpetMat.normalTexture = carpetN;
-  floor.material = carpetMat;
+  // SOL DE MARBRE sombre et chaud (#4a3d30 du handoff) : la teinte du matériau
+  // assombrit la texture de marbre clair. Texture DÉDIÉE au sol : les UV du
+  // triangle couvrent toute la salle, l'échelle du disque de la fontaine y
+  // étirait les veines en traînées de 17 m.
+  const lightMarble = marbleTexture(scene, true);      // plaza + piliers
+  const floorMarble = marbleTexture(scene, true, "marbleFloor", 13, 10);
+  const floorMat = pbr("floorM", scene, { color: C3(0.36, 0.29, 0.22), metallic: 0.05, roughness: 0.22 });
+  floorMat.baseTexture = floorMarble;
+  floor.material = floorMat;
   floor.receiveShadows = true;
   floor.checkCollisions = true;
   floor.metadata = { floor: true };
 
+  // le damas bordeaux ne couvre plus la salle : il habille le TAPIS D'HONNEUR
+  const carpetMat = pbr("carpetM", scene, { color: C3(1, 1, 1), roughness: 0.94 });
+  carpetMat.baseTexture = carpetTexture(scene);
+  const carpetN = normalMap("carpetN", scene, 256, 26, 3.4);
+  carpetMat.normalTexture = carpetN;
+
   // Disque de marbre autour de la fontaine + allée
-  const lightMarble = marbleTexture(scene, true);      // partagé sol + piliers
   const marbleMat = pbr("marbleM", scene, { color: C3(0.62, 0.59, 0.54), metallic: 0.06, roughness: 0.16 });
   marbleMat.baseTexture = lightMarble;
   marbleMat.backFaceCulling = false;
@@ -227,12 +264,17 @@ export function buildWorld(scene) {
   const hw = hall.w / 2, hd = hall.d / 2;
   // le mur +X s'OUVRE autour de la scène de cabaret : deux segments encadrent
   // la baie (le glb de la scène fournit l'arche et remplit le pourtour)
-  const SGAP = 4.5;                      // demi-largeur de la baie
+  const SGAP = 4.5;                      // demi-largeur de la baie de scène
   const sz = LAYOUT.stage.z;
   const zLo = sz - SGAP, zHi = sz + SGAP;
+  // ...et le mur +Z s'ouvre sur la BAIE D'ENTRÉE : trémie de 10,4 m au centre,
+  // linteau au-dessus des portes (le portique et les portes laiton suivent)
+  const EGAP = 5.2;                      // demi-largeur de la baie d'entrée
   const walls = [
     wall(hall.w, hall.h, V3(0, hall.h / 2, -hd), 0),
-    wall(hall.w, hall.h, V3(0, hall.h / 2, hd), 0),
+    wall(hw - EGAP, hall.h, V3(-(EGAP + hw) / 2, hall.h / 2, hd), 0),
+    wall(hw - EGAP, hall.h, V3((EGAP + hw) / 2, hall.h / 2, hd), 0),
+    wall(EGAP * 2, hall.h - 4.4, V3(0, (hall.h + 4.4) / 2, hd), 0),   // linteau
     wall(hall.d, hall.h, V3(-hw, hall.h / 2, 0), Math.PI / 2),
     wall(zLo + hd, hall.h, V3(hw, hall.h / 2, (zLo - hd) / 2), Math.PI / 2),
     wall(hd - zHi, hall.h, V3(hw, hall.h / 2, (zHi + hd) / 2), Math.PI / 2),
@@ -249,7 +291,8 @@ export function buildWorld(scene) {
   }
   const trim = [];
   trim.push(...wainscot(hall.w, V3(0, 0, -hd + 0.3), 0));
-  trim.push(...wainscot(hall.w, V3(0, 0, hd - 0.3), 0));
+  trim.push(...wainscot(hw - EGAP, V3(-(EGAP + hw) / 2, 0, hd - 0.3), 0));
+  trim.push(...wainscot(hw - EGAP, V3((EGAP + hw) / 2, 0, hd - 0.3), 0));
   trim.push(...wainscot(hall.d, V3(-hw + 0.3, 0, 0), Math.PI / 2));
   trim.push(...wainscot(zLo + hd, V3(hw - 0.3, 0, (zLo - hd) / 2), Math.PI / 2));
   trim.push(...wainscot(hd - zHi, V3(hw - 0.3, 0, (zHi + hd) / 2), Math.PI / 2));
@@ -283,8 +326,8 @@ export function buildWorld(scene) {
   const colMat = pbr("colM", scene, { color: C3(1, 1, 1), roughness: 0.24, metallic: 0.05 });
   colMat.baseTexture = lightMarble;
   const capMat = gold(scene, 0.9);
-  // le pilier de droite était planté au milieu de la scène : on l'écarte
-  for (const [px, pz] of [[-13, -11], [-13, 11], [13, -11], [13, 11], [-19, 0], [19, -13]]) {
+  // les huit colonnes du handoff (x en miroir) : (11, ∓6), (−19, ∓6), (∓9, −12), (∓9, 13)
+  for (const [px, pz] of [[11, -6], [11, 6], [-19, -6], [-19, 6], [-9, -12], [9, -12], [-9, 13], [9, 13]]) {
     const shaft = B.MeshBuilder.CreateCylinder("col", { height: hall.h - 0.6, diameter: 1.05, tessellation: 24 }, scene);
     shaft.position = V3(px, (hall.h - 0.6) / 2, pz);
     shaft.material = colMat; shaft.checkCollisions = true; shaft.receiveShadows = true;
@@ -319,7 +362,8 @@ export function buildWorld(scene) {
     return root;
   }
   chandelier(LAYOUT.fountain.x, LAYOUT.fountain.z, 1.6);
-  for (const [x, z] of [[-14, -8], [-14, 8], [12, -8], [13, 8], [0, 13]]) chandelier(x, z, 0.85);
+  // pit, salon VIP, restaurant, allée des machines, axe d'entrée
+  for (const [x, z] of [[16.6, 3.6], [-18.6, -13.4], [13.5, 15.4], [-11, 1.2], [0, 10]]) chandelier(x, z, 0.85);
 
   /* ---------- enseignes néon ---------- */
   function neon(text, pos, rotY, color, size = 0.55) {
@@ -341,14 +385,14 @@ export function buildWorld(scene) {
     p.material = m;
     return p;
   }
-  neon("SLOTS", V3(-21.6, 4.6, 0), Math.PI / 2, "#ff2d6f", 0.5);
-  neon("BAR", V3(LAYOUT.bar.x, 4.3, -hd + 0.35), 0, "#41d7ff", 0.45);
-  neon("BLACKJACK", V3(hw - 0.35, 4.4, LAYOUT.blackjack.z), -Math.PI / 2, "#ffc23d", 0.45);
+  neon("SLOTS", V3(-hw + 0.35, 4.6, 1.2), Math.PI / 2, "#ff2d6f", 0.5);
+  neon("BAR", V3(LAYOUT.bar.x, 5.0, -hd + 0.35), 0, "#41d7ff", 0.45);
+  neon("BLACKJACK", V3(hw - 0.35, 4.6, 10.6), -Math.PI / 2, "#ffc23d", 0.45);
   neon("LE MIRAGE", V3(0, 5.4, hd - 0.35), Math.PI, "#ff9a3d", 0.7);
 
   /* ---------- appliques murales ---------- */
   const sconceMat = pbr("scM", scene, { color: C3(1, 0.75, 0.4), emissive: C3(1.0, 0.6, 0.22), alpha: 0.85 });
-  for (let i = -3; i <= 3; i++) {
+  for (let i = -4; i <= 4; i++) {
     for (const [x, z, ry] of [[i * 6, -hd + 0.45, 0], [i * 6, hd - 0.45, Math.PI], [-hw + 0.45, i * 4.5, Math.PI / 2], [hw - 0.45, i * 4.5, -Math.PI / 2]]) {
       const s = B.MeshBuilder.CreateCylinder("sc", { height: 0.55, diameterTop: 0.34, diameterBottom: 0.1, tessellation: 12 }, scene);
       s.position = V3(x, 3.3, z); s.material = sconceMat;
@@ -357,34 +401,74 @@ export function buildWorld(scene) {
   }
 
   /* ---------- plantes & mobilier d'ambiance ---------- */
+  // les emplacements et les meshes sont EXPOSÉS (plantSpots/plantMeshes) :
+  // venues.js les remplace par les vraies plantes en pot (Poly Haven, CC0)
+  // quand assets/monaco est là — ceci reste le repli procédural.
+  const plantSpots = [[-7.5, -14.5], [7.5, -14.5], [-10, -17.5], [24.5, -14], [24.5, 12], [-24.5, 12], [-6.5, 18.5], [6.5, 18.5]];
+  const plantMeshes = [];
   const leafMat = pbr("leaf", scene, { color: C3(0.09, 0.22, 0.09), roughness: 0.75, backFaceCulling: false });
   const potMat = pbr("pot", scene, { color: C3(0.12, 0.12, 0.14), roughness: 0.35, metallic: 0.5 });
-  for (const [x, z] of [[-8, -15], [8, -15], [-20, -14], [20, -14], [-20, 14], [20, 14], [6, 15], [-6, 15]]) {
+  for (const [x, z] of plantSpots) {
     const pot = B.MeshBuilder.CreateCylinder("pot", { height: 0.7, diameterTop: 0.75, diameterBottom: 0.55, tessellation: 16 }, scene);
     pot.position = V3(x, 0.35, z); pot.material = potMat; pot.checkCollisions = true;
-    casters.push(pot);
+    casters.push(pot); plantMeshes.push(pot);
     for (let i = 0; i < 14; i++) {
       const l = B.MeshBuilder.CreatePlane("lf", { width: 0.22, height: rnd(0.9, 1.7) }, scene);
       l.position = V3(x + rnd(-0.2, 0.2), 0.7 + rnd(0.3, 0.9), z + rnd(-0.2, 0.2));
       l.rotation = V3(rnd(-0.5, 0.5), rnd(0, 6.28), rnd(-0.6, 0.6));
       l.material = leafMat;
-      casters.push(l);
+      casters.push(l); plantMeshes.push(l);
     }
   }
 
-  // cordons de velours à l'entrée
+  /* ---------- l'ARRIVÉE : tapis d'honneur, axe de marbre, portique ---------- */
+  // tapis bordeaux 10,4 × 8,8 centré sur (0, 12.9)
+  const redCarpet = B.MeshBuilder.CreateGround("redCarpet", { width: 10.4, height: 8.8 }, scene);
+  redCarpet.position = V3(0, 0.012, 12.9);
+  redCarpet.material = carpetMat;
+  redCarpet.receiveShadows = true;
+  // incrustation d'axe en marbre clair, du tapis jusqu'au bar (3,4 × 22 à z 2).
+  // Texture à l'aspect de la bande (1:6,5), sinon les veines filent en stries.
+  const axisMat = pbr("axisM", scene, { color: C3(0.62, 0.59, 0.54), metallic: 0.06, roughness: 0.16 });
+  axisMat.baseTexture = marbleTexture(scene, true, "marbleAxis", 1.6, 10);
+  const axis = B.MeshBuilder.CreateGround("axisInlay", { width: 3.4, height: 22 }, scene);
+  axis.position = V3(0, 0.014, 2.0);
+  axis.material = axisMat;
+  axis.receiveShadows = true;
+
+  // portique : dalle à y 4,6, deux colonnes r 0,45 en x ±4,6, portes laiton
+  const porticoSlab = B.MeshBuilder.CreateBox("portico", { width: 10.4, height: 0.5, depth: 2.2 }, scene);
+  porticoSlab.position = V3(0, 4.65, hd);
+  porticoSlab.material = wallTopMat;
+  for (const px of [-4.6, 4.6]) {
+    const c = B.MeshBuilder.CreateCylinder("porticoCol", { height: 4.4, diameter: 0.9, tessellation: 24 }, scene);
+    c.position = V3(px, 2.2, hd - 0.4);
+    c.material = colMat; c.checkCollisions = true; c.receiveShadows = true;
+    casters.push(c);
+    const cap = B.MeshBuilder.CreateCylinder("porticoCap", { height: 0.34, diameterTop: 1.15, diameterBottom: 0.95, tessellation: 24 }, scene);
+    cap.position = V3(px, 4.35, hd - 0.4); cap.material = capMat;
+  }
+  // portes laiton fermées : le casino ne se quitte pas à pied
+  const doorMat = gold(scene, 0.55);
+  for (const px of [-2.2, 2.2]) {
+    const door = B.MeshBuilder.CreateBox("brassDoor", { width: 4.35, height: 4.4, depth: 0.14 }, scene);
+    door.position = V3(px, 2.2, hd - 0.05);
+    door.material = doorMat; door.checkCollisions = true; door.receiveShadows = true;
+  }
+
+  // cordons de velours le long du tapis d'honneur
   const ropeMat = pbr("rope", scene, { color: C3(0.4, 0.05, 0.07), roughness: 0.9 });
   for (let i = -1; i <= 1; i += 2) {
     for (let k = 0; k < 3; k++) {
       const p = B.MeshBuilder.CreateCylinder("post", { height: 1, diameter: 0.09 }, scene);
       // pas de collision : un poteau de 9 cm avec le halo caméra faisait un
       // pilier fantôme de 60 cm en pleine allée d'entrée
-      p.position = V3(i * 3.6, 0.5, 12 - k * 3); p.material = gold(scene, 0.7);
+      p.position = V3(i * 4.2, 0.5, 16.4 - k * 3); p.material = gold(scene, 0.7);
       const b = B.MeshBuilder.CreateSphere("pb", { diameter: 0.18 }, scene);
-      b.position = V3(i * 3.6, 1.05, 12 - k * 3); b.material = gold(scene, 0.9);
+      b.position = V3(i * 4.2, 1.05, 16.4 - k * 3); b.material = gold(scene, 0.9);
       if (k < 2) {
         const r = B.MeshBuilder.CreateCylinder("rp", { height: 3, diameter: 0.06 }, scene);
-        r.position = V3(i * 3.6, 0.86, 10.5 - k * 3);
+        r.position = V3(i * 4.2, 0.86, 14.9 - k * 3);
         r.rotation = V3(Math.PI / 2, 0, 0); r.material = ropeMat;
       }
     }
@@ -395,7 +479,7 @@ export function buildWorld(scene) {
   // qui existait ici doublait cette collision sur 2 m de haut — on butait dans
   // le vide bien au-dessus de la pierre visible.
 
-  return { lights, shadowGens, casters, glow, floor, plaza, walls };
+  return { lights, shadowGens, casters, glow, floor, plaza, walls, plantSpots, plantMeshes };
 }
 
 /** Autorise plus de 4 lumières simultanées sur tous les matériaux. */

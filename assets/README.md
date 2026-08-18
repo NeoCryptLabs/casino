@@ -34,3 +34,16 @@ Deux fabriques, selon ce dont on dispose :
 - **`tools/build-singer.py`** — le repli. Modèle un mannequin stylisé de A à Z
   (metaballs, robe ajustée sur la silhouette mesurée, poids par enveloppes) et
   l'attache au squelette de `player.glb`. Ne dépend d'aucun asset extérieur.
+
+# `player.glb` / `player_f.glb` — les avatars des joueurs
+
+Les joueurs distants tirent au sort l'un des deux. Contrat commun : os au
+suffixe Mixamo (`…Hips`, `…LeftArm`, peu importe le préfixe) **et clips
+`idle`/`walk`** (sans eux l'avatar glisse au lieu de marcher).
+
+- `player.glb` — homme en gilet bleu nuit : maillage du barman (Rodin) re-habillé
+  et porteur des clips de l'ancien Xbot, retargetés par visée de direction.
+  L'ancien Xbot Mixamo reste récupérable dans l'historique git.
+- `player_f.glb` — femme en robe émeraude : `singer.glb` re-habillé, clips inclus.
+
+Fabrique des deux : `tools/build-avatars.py` (à lancer dans Blender).

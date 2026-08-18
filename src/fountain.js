@@ -124,8 +124,13 @@ export function buildFountain(scene, world) {
     sheet(3.62, 2.30, 0.88, 0.94),   // vasque haute -> vasque basse
     sheet(2.22, 0.80, 1.5, 1.62),    // vasque basse -> bassin
   ];
+  // perf : loin de la fontaine ou dos à elle, on éteint émetteurs et
+  // animations — ~7 000 particules CPU ne doivent pas se simuler pour
+  // personne. `asleep` est posé par la veille, plus bas.
+  let asleep = false;
   let flow = 0;
   scene.onBeforeRenderObservable.add(() => {
+    if (asleep) return;
     flow += scene.getEngine().getDeltaTime() / 1000;
     streak.vOffset = -flow * 1.9;
     streak.uOffset = Math.sin(flow * 0.3) * 0.02;
@@ -235,8 +240,36 @@ export function buildFountain(scene, world) {
   // léger scintillement de la lumière subaquatique
   let t = 0;
   scene.onBeforeRenderObservable.add(() => {
+    if (asleep) return;
     t += scene.getEngine().getDeltaTime() / 1000;
     under.intensity = 8 + Math.sin(t * 2.1) * 2.2 + Math.sin(t * 5.7) * 1.4;
+  });
+
+  // LA VEILLE. Vérifiée 2×/s : au-delà de 26 m, ou bassin hors du champ de la
+  // caméra active, les émetteurs s'arrêtent (les gouttes en vol finissent leur
+  // vie et disparaissent) ; tout repart à l'approche. `stop()`/`start()` ne
+  // détruisent rien, la reprise est instantanée.
+  // Même sommeil pour l'eau : la WaterMaterial rend une passe de RÉFLEXION et
+  // une de RÉFRACTION par frame — deux rendus de scène que personne ne regarde
+  // quand la fontaine est hors champ. Figées en veille, relancées au réveil.
+  const allPs = [...jets, splash, mist];
+  const waterRtts = [waterMat._reflectionRTT, waterMat._refractionRTT].filter(Boolean);
+  let sleepT = 0;
+  scene.onBeforeRenderObservable.add(() => {
+    sleepT += scene.getEngine().getDeltaTime();
+    if (sleepT < 500) return;
+    sleepT = 0;
+    const cam = scene.activeCamera;
+    if (!cam) return;
+    const far = B.Vector3.Distance(cam.globalPosition, V3(O.x, 1.2, O.z)) > 26
+      || !cam.isInFrustum(basin);
+    if (far === asleep) return;
+    asleep = far;
+    for (const ps of allPs) far ? ps.stop() : ps.start();
+    for (const rt of waterRtts) {
+      rt.refreshRate = far ? B.RenderTargetTexture.REFRESHRATE_RENDER_ONCE
+        : B.RenderTargetTexture.REFRESHRATE_RENDER_EVERYFRAME;
+    }
   });
 
   // pièces de monnaie au fond du bassin

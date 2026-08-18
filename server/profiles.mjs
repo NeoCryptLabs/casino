@@ -9,8 +9,9 @@
  * arrêté, sans compte à créer.
  *
  * Ce qui est gardé : le pseudo, LA CAISSE (une seule, pour tout le casino —
- * blackjack, machines à sous, bar), la dernière pose DEBOUT, et deux
- * broutilles de confort (verres bus, mise de machine choisie).
+ * blackjack, machines à sous, bar), LA BANQUE DE TEMPS (les barres de temps
+ * additionnel encore en réserve), la dernière pose DEBOUT, et deux broutilles
+ * de confort (verres bus, mise de machine choisie).
  *
  * Ce qui n'est PAS gardé, volontairement : la place assise, la main en cours et
  * la série de chaleur. On ne se rassied pas tout seul à une table, et la
@@ -39,6 +40,24 @@ export const START_CASH = 2500;
 export const FLOOR_CASH = 100;
 export const ADVANCE_CASH = 500;
 
+/**
+ * LA BANQUE DE TEMPS vit DANS LE PROFIL, pas sur la place.
+ *
+ * C'est tout son sens : une barre consommée ne revient pas — ni à la main
+ * suivante, ni en changeant de table, ni en rechargeant la page. Si elle était
+ * portée par la place, il aurait suffi de se relever pour la retrouver pleine,
+ * et le rachat n'aurait rien coûté à personne.
+ *
+ * UNE SEULE BARRE À LA FOIS. Le plafond n'est pas une limite de confort, c'est
+ * la mécanique elle-même : on ne peut racheter QUE la réserve vide, donc jamais
+ * faire provision de sursis avant d'en avoir eu besoin. Le filet se retend
+ * après coup, jamais à l'avance.
+ *
+ * Le nouveau venu en reçoit UNE, offerte par la maison. Ensuite il paye.
+ */
+export const TIME_BANK_START = 1;
+export const TIME_BANK_MAX = 1;
+
 const clampNum = (v, lo, hi, def) =>
   Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def;
 
@@ -48,6 +67,12 @@ function blank(id) {
     id, name: "", cash: START_CASH,
     p: null,            // null = jamais posé : le client reprend son point d'apparition
     r: 0, drinks: 0, slotBet: 10,
+    // CE QU'IL A MIS ET REPRIS au blackjack, cumulé sur toute sa vie de joueur.
+    // Leur différence plafonne sa cagnotte de série (voir POT_SHARE dans
+    // blackjack.mjs) : elle ne rembourse que ce qu'il a réellement laissé.
+    staked: 0, back: 0,
+    // barres de temps additionnel en réserve (voir TIME_BANK_START)
+    tbank: TIME_BANK_START,
     created: now, seen: now,
   };
 }
@@ -65,6 +90,10 @@ function sanitize(id, raw) {
   p.r = clampNum(Number(raw.r), -1e4, 1e4, 0);
   p.drinks = Math.round(clampNum(Number(raw.drinks), 0, 9999, 0));
   p.slotBet = Math.round(clampNum(Number(raw.slotBet), 5, 200, 10));
+  p.staked = Math.round(clampNum(Number(raw.staked), 0, 1e12, 0));
+  p.back = Math.round(clampNum(Number(raw.back), 0, 1e12, 0));
+  // un profil d'avant la banque de temps n'a pas le champ : il reçoit sa barre
+  p.tbank = Math.round(clampNum(Number(raw.tbank), 0, TIME_BANK_MAX, TIME_BANK_START));
   const soon = Date.now() + 86_400_000;       // une horloge un peu avancée, pas l'an 3000
   p.seen = clampNum(Number(raw.seen), 0, soon, Date.now());
   p.created = clampNum(Number(raw.created), 0, soon, p.seen);
@@ -119,11 +148,18 @@ export class Profiles {
     if (!TOKEN.test(token || "")) {
       return { profile: blank("volatile"), token: null, fresh: true, why: "sans jeton" };
     }
-    if (this.live.has(token)) {
-      const src = this.map.get(token) || blank(token);
-      const copy = { ...src, p: src.p ? [...src.p] : null };
-      return { profile: copy, token: null, fresh: false, why: "jeton déjà en jeu" };
-    }
+    // JETON DÉJÀ EN JEU : la nouvelle session le REPREND, elle ne se contente
+    // plus d'une copie volatile.
+    //
+    // Le cas courant n'est pas le double onglet, c'est le simple rechargement
+    // de page : le navigateur ouvre la nouvelle liaison avant que le serveur
+    // ait vu la fermeture de l'ancienne. Refuser le jeton condamnait alors la
+    // session à ne rien retenir — position, caisse, pseudo — et le joueur
+    // revenait à l'endroit de l'avant-dernière visite. Le dernier arrivé gagne ;
+    // c'est à l'appelant de faire passer le précédent en volatile (voir
+    // `claim.stolen` dans server.mjs), pour que deux sessions n'écrivent jamais
+    // dans le même profil.
+    const stolen = this.live.has(token);
     let p = this.map.get(token);
     const fresh = !p;
     if (!p) {
@@ -133,7 +169,7 @@ export class Profiles {
     }
     p.seen = Date.now();
     this.live.add(token);
-    return { profile: p, token, fresh, why: "" };
+    return { profile: p, token, fresh, stolen, why: stolen ? "jeton repris" : "" };
   }
 
   /** Rend le jeton : une reconnexion retrouvera le vrai profil, pas une copie. */

@@ -379,24 +379,78 @@ export class Audio {
    * instant du morceau — y compris celui que le SERVEUR annonce, ce qui aligne
    * la bouche sur la musique pour tous les joueurs, où qu'ils en soient.
    */
-  _buildEnvelope(buf) {
+  async _buildEnvelope(buf) {
+    if (this._envPending) return;                 // deux appels, un seul calcul
+    this._envPending = true;
     const HZ = 30;
-    const ch = buf.getChannelData(0);
-    const win = Math.max(1, Math.floor(buf.sampleRate / HZ));
-    const n = Math.ceil(ch.length / win);
-    const env = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      const a = i * win, b = Math.min(ch.length, a + win);
-      let s = 0, c = 0;
-      // un échantillon sur huit : l'enveloppe d'une voix n'a que faire du reste
-      for (let j = a; j < b; j += 8) { const v = ch[j]; s += v * v; c++; }
-      env[i] = c ? Math.sqrt(s / c) : 0;
+
+    // RMS par fenêtre de 1/30 s d'un canal de PCM.
+    const rms30 = (ch) => {
+      const win = Math.max(1, Math.floor(buf.sampleRate / HZ));
+      const n = Math.ceil(ch.length / win);
+      const out = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const a = i * win, b = Math.min(ch.length, a + win);
+        let s = 0, c = 0;
+        for (let j = a; j < b; j += 8) { const v = ch[j]; s += v * v; c++; }
+        out[i] = c ? Math.sqrt(s / c) : 0;
+      }
+      return out;
+    };
+
+    // PRÉSENCE VOCALE, pas énergie brute : l'ancienne enveloppe (RMS large
+    // bande) ouvrait la bouche dès l'intro instrumentale — 28 s de piano, 28 s
+    // de mâchoire dans le vide. La voix d'un mix est presque toujours au
+    // CENTRE stéréo, l'accompagnement a de la largeur : dans la bande vocale
+    // (220 Hz – 4,2 kHz), l'énergie du canal mid (L+R) MOINS celle du side
+    // (L−R) isole le chant. Rendu hors ligne avec de vrais biquads.
+    let env;
+    if (buf.numberOfChannels >= 2 && typeof OfflineAudioContext !== "undefined") {
+      const off = new OfflineAudioContext(2, buf.length, buf.sampleRate);
+      const src = off.createBufferSource(); src.buffer = buf;
+      const split = off.createChannelSplitter(2);
+      src.connect(split);
+      const merge = off.createChannelMerger(2);
+      const band = (input, out) => {
+        const hp = off.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 220;
+        const lp = off.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 4200;
+        input.connect(hp); hp.connect(lp); lp.connect(merge, 0, out);
+        return input;
+      };
+      const gLm = off.createGain(), gRm = off.createGain();
+      const gLs = off.createGain(), gRs = off.createGain();
+      gLm.gain.value = 0.5; gRm.gain.value = 0.5;    // mid  = (L + R) / 2
+      gLs.gain.value = 0.5; gRs.gain.value = -0.5;   // side = (L − R) / 2
+      const sumM = off.createGain(), sumS = off.createGain();
+      split.connect(gLm, 0); split.connect(gRm, 1); gLm.connect(sumM); gRm.connect(sumM);
+      split.connect(gLs, 0); split.connect(gRs, 1); gLs.connect(sumS); gRs.connect(sumS);
+      band(sumM, 0); band(sumS, 1);
+      merge.connect(off.destination);
+      src.start();
+      const out = await off.startRendering();
+      const mid = rms30(out.getChannelData(0));
+      const side = rms30(out.getChannelData(1));
+      env = new Float32Array(mid.length);
+      // side pondéré ×1,6 (mesuré sur le morceau : meilleur contraste
+      // intro/chant du balayage 1,0 → 2,5 sans écorner les couplets)
+      for (let i = 0; i < mid.length; i++) env[i] = Math.max(0, mid[i] - 1.6 * side[i]);
+    } else {
+      // mono (ou vieux navigateur) : pas de séparation possible, on retombe
+      // sur l'énergie brute — mieux qu'une bouche définitivement close
+      env = rms30(buf.getChannelData(0));
     }
+
     // Étalonnage sur le 90e centile plutôt que sur le maximum : un seul coup de
     // cymbale écraserait sinon tout le reste et la bouche resterait entrouverte.
     const sorted = Float32Array.from(env).sort();
-    const ref = sorted[Math.floor(n * 0.9)] || 1;
-    for (let i = 0; i < n; i++) env[i] = Math.min(1, env[i] / ref);
+    const ref = sorted[Math.floor(env.length * 0.9)] || 1;
+    // ...puis PORTE À BRUIT : le résidu d'accompagnement qui fuit dans le mid
+    // (basse, batterie centrées) ne doit pas faire marmonner la chanteuse.
+    const GATE = 0.25;
+    for (let i = 0; i < env.length; i++) {
+      const v = Math.min(1, env[i] / ref);
+      env[i] = v < GATE ? 0 : (v - GATE) / (1 - GATE);
+    }
     this._concertEnv = env;
     this._concertEnvHz = HZ;
     return env;
@@ -640,15 +694,31 @@ export class Audio {
     return p;
   }
 
-  async say(name, { vol = 0.9, cooldown = 1500, delay = 0 } = {}) {
+  /**
+   * Précharge une réplique. Le décodage d'un mp3 coûte 100 à 300 ms la première
+   * fois : une annonce demandée pile au lancement du spectacle arriverait en
+   * retard, et déborderait sur la scène suivante.
+   */
+  preloadVoice(name) { if (this.ready) this._loadVoice(name); }
+
+  async say(name, { vol = 0.9, cooldown = 1500, delay = 0, queue = false, waited = 0 } = {}) {
     // Journal de diagnostic : une annonce muette peut l'être pour cinq raisons
     // très différentes, et sans trace on ne peut que deviner. `[voix]` dans la
     // console dit laquelle.
     if (!this.ready) { console.warn("[voix]", name, "— contexte audio non initialisé"); return; }
-    if (delay) { setTimeout(() => this.say(name, { vol, cooldown }), delay); return; }
+    if (delay) { setTimeout(() => this.say(name, { vol, cooldown, queue }), delay); return; }
     const now = performance.now();
     this._sayAt = this._sayAt || new Map();
     if (now < (this._speakUntil || 0)) {
+      // `queue` : la réplique ATTEND la fin de celle en cours au lieu d'être
+      // jetée — deux évènements proches (« rien ne va plus » puis un
+      // blackjack) doivent donner deux phrases, pas une. Garde-fou : au-delà
+      // de 4 s d'attente cumulée, l'annonce n'a plus de sens, on la lâche.
+      const wait = this._speakUntil - now + 60;
+      if (queue && waited + wait <= 4000) {
+        setTimeout(() => this.say(name, { vol, cooldown, queue, waited: waited + wait }), wait);
+        return;
+      }
       console.warn("[voix]", name, "— écrasée : ça parle encore pendant",
         Math.round(this._speakUntil - now), "ms");
       return;

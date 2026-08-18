@@ -29,7 +29,16 @@ const MAX_LINES = 60;
 export function createChat({ player, audio } = {}) {
   const box = $("chat"), log = $("chatLog");
   const bar = $("chatBar"), input = $("chatIn"), hint = $("chatHint");
+  const send = $("chatSend");
   let net = null, open = false;
+
+  // Le bouton et l'indication sont les deux seuls accès à la souris : le
+  // bouton envoie, l'indication « Entrée parler » ouvre la saisie. `mousedown`
+  // est neutralisé sur le bouton pour que le champ garde le focus jusqu'à
+  // l'envoi — sinon le clic le fait cligner avant de fermer.
+  send?.addEventListener("mousedown", (e) => e.preventDefault());
+  send?.addEventListener("click", () => submit());
+  hint?.addEventListener("click", () => setOpen(true));
 
   /** Ajoute une ligne. `from` absent = message du système (hors ligne…). */
   function push(text, { from = null, cls = "" } = {}) {

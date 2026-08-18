@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Casino Le Royal Monaco — modélisation 3D</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.184.0/build/three.module.js",
+    "three/addons/controls/OrbitControls.js": "https://unpkg.com/three@0.184.0/examples/jsm/controls/OrbitControls.js",
+    "three/addons/exporters/OBJExporter.js": "https://unpkg.com/three@0.184.0/examples/jsm/exporters/OBJExporter.js",
+    "three/addons/exporters/GLTFExporter.js": "https://unpkg.com/three@0.184.0/examples/jsm/exporters/GLTFExporter.js"
+  },
+  "integrity": {
+    "https://unpkg.com/three@0.184.0/build/three.module.js": "sha384-8FCZ1eVO6it4+pbec2aDtnTrwjWXZLJRC+MAGCIPDgsYnUrl/E0A2YlF8ioMKI/J",
+    "https://unpkg.com/three@0.184.0/build/three.core.js": "sha384-dw2ooPewaEIrAgl6oFDBmmBWCE9oW9LxRGcfwZ0hLvEprzo202wXl7vCYHRlSnOT",
+    "https://unpkg.com/three@0.184.0/examples/jsm/controls/OrbitControls.js": "sha384-4rziNxOBZKQ69i+w+f89KJ55TCYquwchVbByQwmaOeIOXdOU2PLDn3kOfXHwIJC9",
+    "https://unpkg.com/three@0.184.0/examples/jsm/exporters/OBJExporter.js": "sha384-nbwtoZENJD3Vq+ACK0CuGQdPMuDWHkamC2KJD70EV5nfg6jQjfppKOea07YJN+N3",
+    "https://unpkg.com/three@0.184.0/examples/jsm/exporters/GLTFExporter.js": "sha384-VofkvpG6HERhFCYbsUOHeNXBCqID2nfqkQqnVzE1jc/oPcz+qJ13ADdXH08hE+cQ"
+  }
+}
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Marcellus&family=Jost:wght@300;400&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;height:100%;background:#0a0807;font-family:Jost,sans-serif;}
+  three-d-stage:not(:defined){visibility:hidden}
+  three-d-stage{position:absolute;inset:0;}
+  .cap{position:absolute;left:34px;top:30px;z-index:5;color:#efe7d8;pointer-events:none}
+  .cap .k{font-size:11px;letter-spacing:.34em;text-transform:uppercase;color:#c9a227;margin-bottom:10px}
+  .cap .t{font-family:Marcellus,serif;font-size:34px;color:#f4ecdc;line-height:1.05}
+  .cap .s{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:rgba(239,231,216,.5);margin-top:10px}
+  .lg{position:absolute;left:24px;bottom:24px;z-index:5;display:grid;gap:7px;font-size:12px;letter-spacing:.1em;color:rgba(239,231,216,.72);pointer-events:none;max-width:330px;padding:16px 20px;background:rgba(10,8,7,.72);border-left:1px solid rgba(201,162,39,.4)}
+  .lg b{color:#c9a227;font-weight:400;margin-right:8px}
+  .bk{position:absolute;right:34px;top:32px;z-index:5;font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:#c9a227;text-decoration:none}
+  .bk:hover{color:#e8d9a0}
+</style>
+</head>
+<body>
+<div class="cap">
+  <div class="k">Modélisation volumétrique — niveau principal</div>
+  <div class="t">Casino Le Royal Monaco</div>
+  <div class="s">Glisser pour orbiter · molette pour zoomer</div>
+</div>
+<div class="lg">
+  <div><b>01</b>Arrivée, tapis d'honneur au premier plan</div>
+  <div><b>02</b>Fontaine &amp; lustre central · <b>03</b>Bar en fond d'axe</div>
+  <div><b>04</b>Machines à sous à droite · <b>05</b>Blackjack à gauche</div>
+  <div><b>06</b>Scène · <b>07</b>Caisse jetons · <b>08</b>Restaurant · <b>10</b>Salon VIP</div>
+</div>
+<a class="bk" href="Casino Plan.dc.html">← Plan vu du dessus</a>
+<three-d-stage name="casino-royal-monaco" background="#0a0807"></three-d-stage>
+<script src="three-d-stage.js"></script>
+<script type="module">
+const stage = document.querySelector('three-d-stage');
+const { THREE } = await stage.ready;
+
+const M = {
+  marble:   new THREE.MeshStandardMaterial({ color: 0x4a3d30, roughness: 0.35, metalness: 0.08 }),
+  marbleLt: new THREE.MeshStandardMaterial({ color: 0xe6ddca, roughness: 0.3,  metalness: 0.05 }),
+  brass:    new THREE.MeshStandardMaterial({ color: 0xd8b45c, roughness: 0.3, metalness: 0.38 }),
+  felt:     new THREE.MeshStandardMaterial({ color: 0x0f4d3c, roughness: 0.9 }),
+  bordeaux: new THREE.MeshStandardMaterial({ color: 0x5c1526, roughness: 0.85 }),
+  walnut:   new THREE.MeshStandardMaterial({ color: 0x2e1d12, roughness: 0.55 }),
+  water:    new THREE.MeshStandardMaterial({ color: 0x7fb3bd, roughness: 0.12, metalness: 0.2, transparent: true, opacity: 0.75 }),
+  glass:    new THREE.MeshStandardMaterial({ color: 0xbfd2d4, roughness: 0.08, metalness: 0.15, transparent: true, opacity: 0.22 }),
+  screen:   new THREE.MeshStandardMaterial({ color: 0x120d08, roughness: 0.35, emissive: 0x6a4f10, emissiveIntensity: 0.5 }),
+};
+Object.entries(M).forEach(([k, v]) => v.name = k);
+
+const root = new THREE.Group(); root.name = 'casino';
+const add = (parent, geo, mat, name, x, y, z) => {
+  const m = new THREE.Mesh(geo, mat); m.name = name;
+  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
+  parent.add(m); return m;
+};
+const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+const cyl = (r, h, s = 32, r2) => new THREE.CylinderGeometry(r, r2 ?? r, h, s);
+
+/* ---------- sol, tapis, murs ---------- */
+const W = 52, D = 39, WH = 5.0;
+add(root, box(W, 0.3, D), M.marble, 'floor', 0, -0.15, 0);
+add(root, box(10.4, 0.06, 8.8), M.bordeaux, 'carpet_entry', 0, 0.03, 12.9);
+add(root, box(3.4, 0.05, 22), M.marbleLt, 'axis_inlay', 0, 0.02, 2.0);
+
+const wall = (w, d, x, z, name) => add(root, box(w, WH, d), M.marble, name, x, WH / 2, z);
+wall(W, 0.6, 0, -D / 2, 'wall_back');
+wall(0.6, D, -W / 2, 0, 'wall_left');
+wall(0.6, D, W / 2, 0, 'wall_right');
+wall(20.8, 0.6, -15.6, D / 2, 'wall_front_left');
+wall(20.8, 0.6, 15.6, D / 2, 'wall_front_right');
+add(root, box(10.4, 2.2, 0.6), M.marble, 'entry_lintel', 0, WH - 1.1, D / 2);
+
+/* colonnes */
+[[-11, -6], [-11, 6], [19, -6], [19, 6], [-9, -12], [9, -12], [-9, 13], [9, 13]].forEach(([x, z], i) => {
+  add(root, cyl(0.6, WH + 0.6, 24), M.marbleLt, 'column_' + i, x, (WH + 0.6) / 2, z);
+  add(root, cyl(0.8, 0.5, 24), M.brass, 'column_base_' + i, x, 0.25, z);
+  add(root, cyl(0.8, 0.5, 24), M.brass, 'column_cap_' + i, x, WH + 0.35, z);
+});
+
+/* ---------- 02 fontaine ---------- */
+const F = new THREE.Group(); F.name = 'fountain'; F.position.set(0, 0, -0.8); root.add(F);
+add(F, cyl(4.9, 0.7, 48), M.marbleLt, 'basin_rim', 0, 0.35, 0);
+add(F, cyl(4.5, 0.62, 48), M.water, 'basin_water', 0, 0.42, 0);
+add(F, cyl(0.55, 2.2, 24, 0.85), M.brass, 'fountain_stem', 0, 1.1, 0);
+add(F, cyl(1.7, 0.28, 40), M.marbleLt, 'fountain_bowl', 0, 2.34, 0);
+add(F, cyl(0.5, 0.5, 24), M.brass, 'fountain_finial', 0, 2.7, 0);
+add(F, cyl(0.13, 3.2, 12), M.water, 'fountain_jet', 0, 4.3, 0);
+for (let i = 0; i < 8; i++) {
+  const a = (i / 8) * Math.PI * 2;
+  add(F, cyl(0.07, 1.5, 8), M.water, 'jet_' + i, Math.cos(a) * 2.6, 2.9, Math.sin(a) * 2.6)
+    .rotation.set(Math.cos(a) * 0.35, 0, -Math.sin(a) * 0.35);
+}
+
+/* lustre */
+const CH = new THREE.Group(); CH.name = 'chandelier'; CH.position.set(0, 0, -0.8); root.add(CH);
+add(CH, new THREE.TorusGeometry(3.6, 0.16, 12, 64), M.brass, 'chandelier_ring_1', 0, 5.0, 0).rotation.x = Math.PI / 2;
+add(CH, new THREE.TorusGeometry(2.3, 0.12, 12, 48), M.brass, 'chandelier_ring_2', 0, 5.8, 0).rotation.x = Math.PI / 2;
+add(CH, cyl(0.1, 1.0, 10), M.brass, 'chandelier_rod', 0, 6.4, 0);
+const bulb = new THREE.MeshStandardMaterial({ color: 0xfff2c8, roughness: 0.2, emissive: 0xffd98a, emissiveIntensity: 1.2 });
+bulb.name = 'bulb';
+for (let i = 0; i < 24; i++) {
+  const a = (i / 24) * Math.PI * 2, r = i % 2 ? 3.6 : 2.3, y = i % 2 ? 5.0 : 5.8;
+  add(CH, new THREE.SphereGeometry(0.16, 16, 12), bulb, 'crystal_' + i, Math.cos(a) * r, y - 0.4, Math.sin(a) * r);
+}
+
+/* ---------- 03 bar (fond, dans l'axe de l'entrée) ---------- */
+const B = new THREE.Group(); B.name = 'bar'; B.position.set(0, 0, -15.2); root.add(B);
+const halfDisc = (r, h, s = 48) => new THREE.CylinderGeometry(r, r, h, s, 1, false, -Math.PI / 2, Math.PI);
+const arcBand = (rOut, rIn, h) => {
+  const s = new THREE.Shape();
+  s.absarc(0, 0, rOut, 0, Math.PI, false);
+  s.absarc(0, 0, rIn, Math.PI, 0, true);
+  const g = new THREE.ExtrudeGeometry(s, { depth: h, bevelEnabled: false, curveSegments: 48 });
+  g.rotateX(Math.PI / 2);
+  return g;
+};
+/* comptoir : bande courbe de 65 cm de profondeur, le barman sert depuis l'arrière */
+add(B, arcBand(3.55, 2.9, 1.15), M.walnut, 'bar_counter', 0, 1.15, -2.4);
+add(B, arcBand(3.7, 2.78, 0.1), M.marbleLt, 'bar_top', 0, 1.26, -2.4);
+add(B, new THREE.TorusGeometry(3.66, 0.05, 8, 48, Math.PI), M.brass, 'bar_rail', 0, 1.3, -2.4).rotation.x = Math.PI / 2;
+add(B, arcBand(1.65, 1.15, 0.9), M.walnut, 'bar_backcounter', 0, 0.9, -2.4);
+add(B, box(9.4, 3.6, 0.5), M.walnut, 'backbar', 0, 1.8, -3.9);
+for (let s = 0; s < 3; s++) {
+  add(B, box(8.8, 0.1, 0.6), M.brass, 'shelf_' + s, 0, 1.4 + s * 0.9, -3.5);
+  for (let i = 0; i < 13; i++)
+    add(B, cyl(0.07, 0.34, 10), M.brass, 'bottle_' + s + '_' + i, -3.9 + i * 0.65, 1.62 + s * 0.9, -3.5);
+}
+for (let i = 0; i < 7; i++) {
+  const a = Math.PI * (0.08 + (i / 6) * 0.84);
+  const x = Math.cos(a) * 4.45, z = -2.4 + Math.sin(a) * 4.45;
+  add(B, cyl(0.32, 0.15, 20), M.bordeaux, 'bar_stool_seat_' + i, x, 0.78, z);
+  add(B, cyl(0.09, 0.75, 12), M.brass, 'bar_stool_post_' + i, x, 0.38, z);
+}
+
+/* ---------- 05 blackjack ---------- */
+function blackjack(x, z, name) {
+  const g = new THREE.Group(); g.name = name; g.position.set(x, 0, z); g.rotation.y = Math.PI / 2; root.add(g);
+  add(g, new THREE.CylinderGeometry(1.9, 1.9, 0.14, 40, 1, false, -Math.PI / 2, Math.PI), M.felt, name + '_top', 0, 0.88, 0);
+  add(g, new THREE.TorusGeometry(1.92, 0.07, 10, 40, Math.PI), M.brass, name + '_rim', 0, 0.96, 0).rotation.x = Math.PI / 2;
+  add(g, box(3.6, 0.86, 0.14), M.walnut, name + '_back', 0, 0.43, -0.06);
+  add(g, cyl(1.5, 0.86, 24, 1.7), M.walnut, name + '_apron', 0, 0.43, 0.3);
+  for (let i = 0; i < 5; i++) {
+    const a = Math.PI * (0.12 + (i / 4) * 0.76);
+    const px = Math.cos(a) * 2.55, pz = Math.sin(a) * 2.55;
+    add(g, cyl(0.28, 0.14, 18), M.bordeaux, name + '_stool_' + i, px, 0.72, pz);
+    add(g, cyl(0.08, 0.68, 10), M.brass, name + '_stool_post_' + i, px, 0.34, pz);
+  }
+  add(g, cyl(0.3, 0.12, 16), M.marbleLt, name + '_shoe', -1.0, 0.99, 0.1);
+}
+blackjack(-16.6, -1.6, 'blackjack_1');
+blackjack(-16.6, 3.6, 'blackjack_2');
+blackjack(-16.6, 8.8, 'blackjack_3');
+
+/* ---------- 09 roulettes ---------- */
+function roulette(x, z, name) {
+  const g = new THREE.Group(); g.name = name; g.position.set(x, 0, z); root.add(g);
+  const t = add(g, cyl(1.75, 0.14, 40), M.felt, name + '_top', 0, 0.86, 0); t.scale.z = 0.62;
+  add(g, cyl(1.4, 0.84, 24), M.walnut, name + '_base', 0, 0.42, 0).scale.z = 0.62;
+  add(g, cyl(0.62, 0.2, 32), M.walnut, name + '_wheel', 0, 1.02, 0);
+  add(g, cyl(0.2, 0.16, 20), M.brass, name + '_wheel_hub', 0, 1.16, 0);
+}
+roulette(-6.4, -0.8, 'roulette_1');
+roulette(6.4, -0.8, 'roulette_2');
+
+/* ---------- 04 machines à sous ---------- */
+function slot(parent, x, z, ry, name) {
+  const g = new THREE.Group(); g.name = name; g.position.set(x, 0, z); g.rotation.y = ry; parent.add(g);
+  add(g, box(0.85, 1.0, 0.7), M.walnut, name + '_cab', 0, 0.5, 0);
+  add(g, box(0.78, 0.62, 0.08), M.screen, name + '_screen', 0, 1.35, 0.3).rotation.x = -0.22;
+  add(g, box(0.85, 0.42, 0.7), M.brass, name + '_crown', 0, 1.85, 0);
+  add(g, cyl(0.3, 0.12, 16), M.bordeaux, name + '_stool', 0, 0.62, 1.15);
+  add(g, cyl(0.07, 0.58, 10), M.brass, name + '_stool_post', 0, 0.29, 1.15);
+}
+const S = new THREE.Group(); S.name = 'slot_hall'; root.add(S);
+[-5.6, 1.2, 8.0].forEach((rowZ, r) => {
+  for (let i = 0; i < 9; i++) {
+    const x = 14.8 + i * 0.95;
+    slot(S, x, rowZ - 0.4, Math.PI, `slot_${r}_${i}a`);
+    slot(S, x, rowZ + 0.4, 0, `slot_${r}_${i}b`);
+  }
+  add(S, box(9.2, 2.3, 0.2), M.brass, 'slot_spine_' + r, 18.6, 1.15, rowZ);
+});
+
+/* ---------- 06 scène : contre le mur gauche, face aux tables de blackjack ---------- */
+const ST = new THREE.Group(); ST.name = 'stage'; ST.position.set(-22.4, 0, 3.6); ST.rotation.y = Math.PI / 2; root.add(ST);
+add(ST, box(14, 0.9, 6), M.walnut, 'stage_deck', 0, 0.45, 0);
+add(ST, box(14, 0.2, 6), M.bordeaux, 'stage_floor', 0, 0.95, 0);
+add(ST, box(14, 4.8, 0.4), M.bordeaux, 'stage_backdrop', 0, 2.4, -3.0);
+for (let i = 0; i < 11; i++)
+  add(ST, cyl(0.34, 4.4, 12), M.bordeaux, 'curtain_fold_' + i, -6.4 + i * 1.28, 2.4, -2.6);
+add(ST, box(14.4, 0.5, 0.5), M.brass, 'stage_valance', 0, 5.0, -2.4);
+add(ST, box(14, 0.14, 0.5), M.brass, 'stage_lip', 0, 1.02, 2.9);
+
+/* ---------- 08 restaurant ---------- */
+function diner(x, z, name) {
+  const g = new THREE.Group(); g.name = name; g.position.set(x, 0, z); root.add(g);
+  add(g, cyl(1.1, 0.08, 32), M.marbleLt, name + '_top', 0, 0.78, 0);
+  add(g, cyl(0.16, 0.78, 16), M.walnut, name + '_stem', 0, 0.39, 0);
+  add(g, cyl(0.5, 0.06, 20), M.brass, name + '_foot', 0, 0.03, 0);
+  add(g, cyl(0.09, 0.32, 10), M.brass, name + '_candle', 0, 0.98, 0);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + 0.4, cx = Math.cos(a) * 1.55, cz = Math.sin(a) * 1.55;
+    add(g, box(0.46, 0.08, 0.46), M.bordeaux, name + '_seat_' + i, cx, 0.45, cz).rotation.y = -a;
+    add(g, box(0.46, 0.62, 0.08), M.walnut, name + '_back_' + i, cx + Math.cos(a) * 0.2, 0.76, cz + Math.sin(a) * 0.2).rotation.y = -a;
+    add(g, cyl(0.06, 0.45, 8), M.walnut, name + '_leg_' + i, cx, 0.22, cz);
+  }
+}
+[-20.5, -16.0, -11.5, -7.0].forEach((x, i) => diner(x, 15.4, 'table_diner_' + (i + 1)));
+
+/* ---------- 07 caisse / jetons ---------- */
+const C = new THREE.Group(); C.name = 'cashier'; C.position.set(18.8, 0, 15.6); root.add(C);
+add(C, box(9.4, 1.15, 1.2), M.walnut, 'cashier_counter', 0, 0.575, 0);
+add(C, box(9.6, 0.12, 1.4), M.marbleLt, 'cashier_top', 0, 1.2, 0);
+add(C, box(9.4, 3.4, 0.3), M.brass, 'cashier_backwall', 0, 1.7, 1.6);
+for (let i = 0; i < 4; i++) {
+  add(C, box(0.12, 1.6, 1.3), M.brass, 'cashier_divider_' + i, -3.6 + i * 2.4, 1.9, 0);
+  add(C, cyl(0.2, 0.5, 20), M.bordeaux, 'chip_stack_' + i, -3.6 + i * 2.4 + 1.2, 1.5, -0.2);
+}
+
+/* ---------- 11 vestiaire ---------- */
+const V = new THREE.Group(); V.name = 'cloakroom'; V.position.set(10.1, 0, 17.2); root.add(V);
+add(V, box(7.0, 1.1, 1.0), M.walnut, 'cloak_counter', 0, 0.55, 0);
+add(V, box(7.2, 0.1, 1.2), M.marbleLt, 'cloak_top', 0, 1.15, 0);
+add(V, box(7.0, 2.6, 0.3), M.walnut, 'cloak_backwall', 0, 1.3, 1.2);
+
+/* ---------- 10 salon privé VIP ---------- */
+const P = new THREE.Group(); P.name = 'vip_salon'; P.position.set(18.6, 0, -13.4); root.add(P);
+add(P, box(10, 0.08, 6.8), M.bordeaux, 'vip_carpet', 0, 0.05, 0);
+add(P, box(10, 3.6, 0.15), M.glass, 'vip_glass_front', 0, 1.8, 3.4);
+add(P, box(0.15, 3.6, 6.8), M.glass, 'vip_glass_side', -5, 1.8, 0);
+add(P, box(10, 0.3, 0.3), M.brass, 'vip_lintel', 0, 3.7, 3.4);
+const bac = add(P, cyl(2.1, 0.14, 40), M.felt, 'baccarat_top', 0, 0.88, -0.4); bac.scale.z = 0.55;
+add(P, cyl(1.7, 0.84, 28), M.walnut, 'baccarat_base', 0, 0.42, -0.4).scale.z = 0.55;
+for (let i = 0; i < 6; i++) {
+  const a = (i / 6) * Math.PI * 2 + 0.3, cx = Math.cos(a) * 2.9, cz = -0.4 + Math.sin(a) * 1.9;
+  add(P, cyl(0.3, 0.14, 18), M.bordeaux, 'vip_stool_' + i, cx, 0.74, cz);
+  add(P, cyl(0.08, 0.7, 10), M.brass, 'vip_stool_post_' + i, cx, 0.35, cz);
+}
+
+/* ---------- 01 portique d'arrivée ---------- */
+const E = new THREE.Group(); E.name = 'entrance'; E.position.set(0, 0, 19.5); root.add(E);
+add(E, box(10.4, 0.35, 2.2), M.marbleLt, 'porte_cochere_slab', 0, 4.6, 1.4);
+[-4.6, 4.6].forEach((x, i) => {
+  add(E, cyl(0.45, 4.4, 24), M.marbleLt, 'entry_column_' + i, x, 2.2, 2.0);
+  add(E, cyl(0.62, 0.36, 24), M.brass, 'entry_column_cap_' + i, x, 4.24, 2.0);
+});
+add(E, box(4.4, 3.2, 0.2), M.brass, 'entry_doors', 0, 1.6, 0.35);
+add(root, box(11.6, 0.1, 3.2), M.bordeaux, 'entry_runner', 0, 0.06, 20.6);
+
+stage.setObject(root);
+
+/* éclairage d'ambiance chaud + cadrage 45° depuis l'arrivée */
+const sc = stage._scene;
+[[0, 4.2, -0.8, 90], [-19, 3.2, 3.6, 55], [18.6, 3.2, 1, 55], [0, 3.4, 14, 45], [-15, 3.0, 14, 40]]
+  .forEach(([x, y, z, p]) => { const l = new THREE.PointLight(0xffd9a0, p, 46, 2); l.position.set(x, y, z); sc.add(l); });
+sc.add(new THREE.AmbientLight(0xfff0d8, 0.35));
+
+const cam = stage._camera, ctr = stage._controls;
+cam.position.set(34, 27, 40);
+ctr.target.set(0, 2.5, 1);
+ctr.update();
+</script>
+</body>
+</html>

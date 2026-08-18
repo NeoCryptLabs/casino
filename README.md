@@ -33,6 +33,7 @@ viennent de leur CDN, rien n'est vendorisé.
 | `1` `2` `3` `4` | miser 5 / 25 / 100 / 500 |
 | `T` `R` `D` `S` | tirer, rester, doubler, **séparer** |
 | `O` / `N` | accepter / refuser l'**assurance** |
+| `C` / `B` | encaisser la **cagnotte** / racheter une **barre de temps** |
 | `P` (ou `F2`) | **mode éditeur** (voir plus bas) |
 
 On peut s'asseoir à **n'importe quelle place libre** — chaises du blackjack,
@@ -127,9 +128,9 @@ termine, la chanteuse salue, sort, le rideau tombe.
 
 ## Ce qui vous suit d'une visite à l'autre
 
-Le casino se souvient de vous : **pseudo**, **caisse** et **l'endroit où vous
-vous êtes arrêté**, plus deux broutilles de confort (verres bus, mise de machine
-choisie). Tout ça vit côté serveur, dans `server/players.json` — écrit
+Le casino se souvient de vous : **pseudo**, **caisse**, **banque de temps** et
+**l'endroit où vous vous êtes arrêté**, plus deux broutilles de confort (verres
+bus, mise de machine choisie). Tout ça vit côté serveur, dans `server/players.json` — écrit
 atomiquement, à la déconnexion, toutes les dix secondes, et à l'arrêt du
 process.
 
@@ -212,6 +213,38 @@ clients voient la même flamme, aucun ne peut s'inventer un ×3. Le rendu
 (automate de feu en bas d'écran, distorsion de chaleur, braises, lampe de table
 qui vire au rouge) est dans `src/heat.js`.
 
+## La banque de temps
+
+Le chrono de décision laisse douze secondes. Passé ce délai la table tranchait
+à votre place — main figée sur *rester*, mise en jeu, et vous reveniez sur un
+coup que vous n'aviez pas joué. Il y a maintenant un filet : la **banque de
+temps**.
+
+Quand le chrono arrive à zéro, une **barre de réserve** est consommée d'office
+et le temps repart pour **20 secondes** — la jauge passe du rouge au blanc-or,
+et le bandeau annonce *TEMPS ADDITIONNEL*. Votre main est sauvée ; la table,
+elle, a ralenti, et tout le monde l'a vu.
+
+Trois règles font tout l'objet :
+
+- elle **ne se recharge jamais toute seule** — ni à la main suivante, ni en
+  changeant de table, ni en revenant demain : la réserve vit dans votre profil
+  (`tbank` dans `server/players.json`), pas sur la place ;
+- **une barre par décision** : le sursis ne se rejoue pas sur la même carte,
+  mais tirer relance le chrono normal, et une autre barre peut y passer ;
+- elle se **rachète au tapis pour 10 €**, mais seulement **entre deux manches**
+  et seulement **une fois la vôtre consommée** (`B`, ou le bouton *+TEMPS*).
+  On ne fait pas provision de sursis : le filet se retend après coup, jamais à
+  l'avance — et jamais pendant le coup en cours, qui reviendrait à acheter du
+  temps à la table entière.
+
+La maison en offre **une** à l'arrivée. Ensuite, on paye.
+
+Le filet ne couvre que la décision : ne pas miser à temps ne coûte rien, et une
+assurance non répondue est déjà le choix prudent. Il ne joue pas non plus pour
+les places automatiques — qui ferme son onglet ne stationne pas la table, sa
+main se termine à la stratégie de base.
+
 ## Mode éditeur (F2) et plan comme donnée
 
 `F2` en marchant : vol libre (`ZQSD` + `Espace`/`C`), clic pour sélectionner,
@@ -270,7 +303,8 @@ Priorité : `LAYOUT` (défauts) < ancres du `world.glb` < `layout.json`.
 | fichier | origine | note |
 |---|---|---|
 | `assets/dealer.glb`, `barman.glb` | générés via **Hyper3D Rodin**, puis riggés et pondérés dans Blender | vérifier les conditions du service avant tout usage commercial |
-| `assets/player.glb` | **Xbot**, personnage Mixamo (via les exemples three.js) | Mixamo restreint la redistribution — à remplacer par un modèle à soi pour un usage sérieux |
+| `assets/player.glb` | avatar masculin « client chic » : maillage de `barman.glb` (Rodin) re-habillé (gilet bleu nuit) et porteur des clips du Xbot retargetés par `tools/build-avatars.py` | remplace l'ancien Xbot Mixamo (récupérable dans git) ; les clips `idle`/`walk`… viennent de Mixamo |
+| `assets/player_f.glb` | avatar féminin « cliente chic » : `singer.glb` re-habillé (robe émeraude) par `tools/build-avatars.py`, clips inclus | mêmes réserves de droit à l'image que `singer.glb` |
 | `assets/singer.glb` | modèle tiers riggé (fourni hors dépôt), **retargeté** sur les clips de `player.glb` par `tools/retarget-singer.py` | le modèle porte les traits d'une personne réelle : droit à l'image à vérifier avant toute diffusion publique ou commerciale |
 | figurantes | `Michelle.glb`, chargé à l'exécution depuis threejs.org | non redistribué ici |
 | `assets/voice/*.mp3` | voix du croupier générée via **ElevenLabs** (voix pro « David », compte du propriétaire) — hors ligne, le jeu n'appelle aucune API | vérifier la licence ElevenLabs du compte pour l'usage visé |

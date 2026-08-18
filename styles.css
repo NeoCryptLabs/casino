@@ -175,17 +175,22 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
 /* Bas-gauche : le portefeuille tient le haut-gauche, la barre de table le
    centre, le compteur d'images le bas-droite. Le bloc grandit vers le HAUT,
    la saisie reste donc toujours à la même hauteur sous les yeux. */
-#chat{position:absolute;left:26px;bottom:16px;width:min(380px,32vw);
-  display:flex;flex-direction:column;gap:6px;
-  font-size:12.5px;letter-spacing:.05em}
-#chatLog{display:flex;flex-direction:column;justify-content:flex-end;gap:2px;
-  max-height:32vh;overflow:hidden}
+#chat{position:absolute;left:26px;bottom:16px;width:min(480px,38vw);
+  display:flex;flex-direction:column;gap:8px;
+  font-size:15px;letter-spacing:.04em;transition:bottom .25s}
+/* À table, la barre de blackjack occupe tout le bas de l'écran : le salon
+   monte se poser juste au-dessus d'elle au lieu de finir derrière. */
+#hud:has(#bj:not([hidden])) #chat{bottom:132px}
+#chatLog{display:flex;flex-direction:column;justify-content:flex-end;gap:3px;
+  max-height:36vh;overflow:hidden}
 .chatline{opacity:0;transform:translateY(5px);transition:opacity .3s,transform .3s;
-  padding:2px 4px;line-height:1.55;color:#e9dcb8;word-break:break-word;
-  text-shadow:0 2px 8px #000,0 0 3px #000}
+  padding:3px 5px;line-height:1.5;color:#f2e6c4;word-break:break-word;
+  text-shadow:0 2px 8px #000,0 0 4px #000,0 1px 2px #000}
 .chatline.in{opacity:1;transform:none}
 .chatline b{margin-right:7px;font-weight:400;color:#ffd76a}
 .chatline.me b{color:#7fd7a0}          /* soi-même : on se repère d'un coup d'œil */
+.chatline.dealer{font-style:italic;color:#e8c977}   /* les piques du croupier */
+.chatline.dealer b{color:#ffb84a;font-style:normal}
 .chatline.sys{color:#9d7c3f;font-style:italic}
 /* Fondu au bout de FADE_MS, puis retrait de la mise en page — sinon les lignes
    éteintes continueraient de pousser les vivantes hors du cadre. */
@@ -195,18 +200,28 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
 #chat.open #chatLog{overflow-y:auto;padding:6px 6px 6px 4px;border-radius:6px;
   background:linear-gradient(180deg,rgba(10,7,3,0),rgba(10,7,3,.55))}
 #chat.open .chatline{opacity:1;transform:none}
-#chatBar{display:flex;align-items:center;gap:8px;pointer-events:auto;
-  padding:7px 11px;border-radius:4px;
-  background:linear-gradient(180deg,rgba(24,18,8,.45),rgba(10,8,4,.66));
-  border:1px solid rgba(232,196,119,.42);backdrop-filter:blur(6px);
-  box-shadow:0 0 22px rgba(255,196,80,.12),inset 0 0 18px rgba(255,196,80,.04)}
+#chatBar{display:flex;align-items:center;gap:10px;pointer-events:auto;
+  padding:10px 13px;border-radius:5px;
+  background:linear-gradient(180deg,rgba(24,18,8,.6),rgba(10,8,4,.8));
+  border:1px solid rgba(232,196,119,.55);backdrop-filter:blur(6px);
+  box-shadow:0 0 26px rgba(255,196,80,.16),inset 0 0 18px rgba(255,196,80,.05)}
 #chatBar .caret{color:#ffd76a;text-shadow:0 0 10px rgba(255,190,80,.8)}
-#chatIn{flex:1;min-width:0;font:inherit;font-size:13px;letter-spacing:.05em;
+#chatIn{flex:1;min-width:0;font:inherit;font-size:16px;letter-spacing:.04em;
   color:#fff3d4;background:none;border:0;outline:none;caret-color:#ffd76a;
   user-select:text}
-#chatIn::placeholder{color:#6f5a30;letter-spacing:.12em}
-#chatHint{font-size:9.5px;letter-spacing:.24em;color:#6f5a30;text-shadow:0 2px 8px #000}
-#chatHint kbd{min-width:18px;margin-right:6px;padding:1px 5px;font-size:10px}
+#chatIn::placeholder{color:#8a7040;letter-spacing:.1em}
+#chatSend{flex:none;font:inherit;font-size:13px;letter-spacing:.14em;
+  text-transform:uppercase;cursor:pointer;padding:6px 14px;border-radius:4px;
+  color:#1c1206;background:linear-gradient(180deg,#ffd76a,#d9a83e);
+  border:1px solid rgba(255,225,150,.7);
+  box-shadow:0 0 14px rgba(255,196,80,.35),inset 0 1px 0 rgba(255,255,255,.35)}
+#chatSend:hover{background:linear-gradient(180deg,#ffe28c,#e6b84f);
+  box-shadow:0 0 20px rgba(255,196,80,.55),inset 0 1px 0 rgba(255,255,255,.4)}
+#chatSend:active{transform:translateY(1px)}
+#chatHint{pointer-events:auto;cursor:pointer;width:max-content;
+  font-size:12px;letter-spacing:.2em;color:#b3924f;text-shadow:0 2px 8px #000}
+#chatHint:hover{color:#ffd76a}
+#chatHint kbd{min-width:22px;margin-right:8px;padding:2px 7px;font-size:12px}
 
 #drinkFx{position:absolute;inset:0;opacity:0;transition:opacity 1.2s;pointer-events:none;
   background:radial-gradient(ellipse at 50% 50%,rgba(255,190,90,0) 40%,rgba(120,60,10,.5) 100%)}
@@ -215,7 +230,10 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
 /* ---------- PANELS ---------- */
 /* Barre compacte : elle ne doit jamais masquer les cartes du joueur, qui
    occupent le bas de l'image dans la vue assise. */
-#bj{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);pointer-events:auto;
+/* Centrage par marges autos, PAS par left:50%+translate : l'espace offert à un
+   absolu posé à left:50% s'arrête au bord droit — la barre était plafonnée à
+   une DEMI-fenêtre et repliait ses boutons en lignes supplémentaires. */
+#bj{position:absolute;left:0;right:0;margin:0 auto;width:fit-content;bottom:10px;pointer-events:auto;
   display:flex;flex-direction:row;align-items:center;justify-content:center;flex-wrap:wrap;gap:16px;
   padding:9px 18px;border-radius:6px;background:linear-gradient(180deg,rgba(14,10,4,.72),rgba(6,4,2,.86));
   border:1px solid rgba(190,150,75,.28);backdrop-filter:blur(10px);box-shadow:0 12px 40px rgba(0,0,0,.7)}
@@ -226,7 +244,15 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
 #bjinfo{display:flex;gap:20px;font-size:15px;letter-spacing:.1em}
 #bjinfo .lbl{display:block;font-size:9px;letter-spacing:.24em;color:#9d7c3f;margin-bottom:2px}
 #bjinfo .row{text-align:center;min-width:70px}
-#bjmsg{font-size:12px;letter-spacing:.16em;color:#e8c977;min-width:130px;text-align:center}
+/* Le message de jeu (« À VOUS DE JOUER », « GAGNÉ »…) : plaque de verre fumé
+   dans le style des consoles holographiques, vide = invisible. */
+#bjmsg{font-size:17px;font-weight:700;letter-spacing:.26em;color:#ffe9b0;text-align:center;
+  padding:10px 26px 10px 32px;border-radius:6px;
+  background:linear-gradient(180deg,rgba(24,18,8,.44),rgba(10,8,4,.6));
+  border:1px solid rgba(232,196,119,.34);backdrop-filter:blur(4px);
+  text-shadow:0 0 16px rgba(255,184,74,.55);
+  box-shadow:0 0 24px rgba(255,196,80,.12), inset 0 0 18px rgba(255,196,80,.05)}
+#bjmsg:empty{display:none}
 #bjbet,#bjact,.slotrow{display:flex;align-items:center;gap:10px}
 .betlabel{font-size:10px;letter-spacing:.26em;color:#9d7c3f}
 #bjbet,#bjact{gap:8px}
@@ -295,9 +321,13 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
 #editHud .keys{font-size:10.5px;letter-spacing:.1em;line-height:1.9;color:#8a6f3d}
 #editHud .keys b{color:#d8b25f}
 
-/* ---------- CHRONO DE TABLE ---------- */
-#bjcol{display:flex;flex-direction:column;align-items:center;gap:6px}
-#bjtimer{width:132px;height:3px;background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden}
+/* ---------- MESSAGE + CHRONO DE TABLE — bandeau fixe haut d'écran ---------- */
+/* Centrage par marges autos comme #bj (voir plus haut) : un left:50%+translate
+   plafonnerait la largeur offerte à une demi-fenêtre. pointer-events:none —
+   c'est de l'affichage pur, la souris joue en dessous. */
+#bjtop{position:absolute;top:16px;left:0;right:0;margin:0 auto;width:fit-content;
+  display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;z-index:6}
+#bjtimer{width:230px;height:3px;background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden}
 #bjtimerfill{height:100%;width:100%;background:linear-gradient(90deg,#ffd76a,#ffb43c);
   box-shadow:0 0 8px rgba(255,190,80,.55)}
 #bjtimer.urgent #bjtimerfill{background:linear-gradient(90deg,#ff7a4a,#ff2e14);
@@ -305,23 +335,62 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
 #bjtimer.urgent{animation:tpulse .5s ease-in-out infinite}
 @keyframes tpulse{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.9)}}
 
+/* ---------- BANQUE DE TEMPS ---------- */
+/* LE SURSIS NE ROUGIT PAS. Le rouge du chrono annonce une main perdue ; ici
+   elle est déjà sauvée, c'est la RÉSERVE qui brûle. Blanc-or, plus large, un
+   battement plus lent : un autre temps, pas la fin du même. */
+#bjtimer.bank #bjtimerfill{background:linear-gradient(90deg,#fff6dc,#ffd05a);
+  box-shadow:0 0 14px rgba(255,225,150,.95)}
+#bjtimer.bank{animation:bankpulse 1.1s ease-in-out infinite}
+@keyframes bankpulse{0%,100%{transform:scaleY(1.6)}50%{transform:scaleY(2.4)}}
+
+/* La réserve : une barre par sursis restant, sous le chrono. Tout-ou-rien —
+   jamais de demi-barre (voir ui.setTimeBank). */
+#bjbank{display:flex;align-items:center;gap:8px;font-size:9.5px;letter-spacing:.16em;
+  color:#8a6f3d;text-shadow:0 1px 6px #000}
+#bjbankpips{display:flex;gap:4px}
+#bjbankpips i{display:block;width:26px;height:4px;border-radius:2px;
+  background:linear-gradient(90deg,#ffe9b0,#ffb43c);
+  box-shadow:0 0 8px rgba(255,190,80,.5)}
+/* épuisée : la ligne RESTE, creuse. « Il ne t'en reste plus » est une
+   information de jeu, pas une absence d'affichage. */
+#bjbankpips i.off{background:none;border:1px solid rgba(255,255,255,.16);
+  box-shadow:none;height:4px}
+#bjbank.empty{color:#6a563a;opacity:.7}
+#bjbank.on{color:#ffe9b0}
+#bjbank.on #bjbankpips i{animation:bankpip .9s ease-in-out infinite}
+@keyframes bankpip{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* +TEMPS : or froid, pour ne pas se confondre avec RÉPÉTER (or chaud) ni avec
+   ENCAISSER (bleu de la cagnotte). */
+#buyTime{color:#dff1ff;border-color:rgba(180,220,255,.45);background:rgba(150,200,255,.08)}
+#buyTime:hover{background:rgba(170,215,255,.20)}
+#buyTime{transition:opacity .2s,filter .2s}
+#buyTime b{display:inline-block;min-width:56px;text-align:center;color:#bfe4ff}
+
 /* ---------- ASSURANCE & 21+3 ---------- */
 #bjins{display:flex;align-items:center;gap:10px}
 .inslbl{font-size:12px;letter-spacing:.1em;color:#ffd76a;white-space:nowrap;
   animation:insblink 1s ease-in-out infinite}
 @keyframes insblink{0%,100%{opacity:1}50%{opacity:.55}}
-#side21 b:empty{display:none}
-#side21 b{color:#ffd76a;margin-left:4px}
+/* la valeur du 21+3 garde sa case même vide : géométrie fixe (voir #bjbet) */
+#side21 b{color:#ffd76a;margin-left:4px;display:inline-block;min-width:44px;text-align:center}
 
 /* ---------- RÉPÉTER LA MISE & CAGNOTTE DE SÉRIE ---------- */
-/* Deux boutons qui n'existent QUE lorsqu'ils ont un sens : répéter n'a rien à
-   répéter sur un cercle déjà garni, et on n'encaisse pas une cagnotte vide.
-   Un bouton grisé en permanence n'apprendrait rien — celui-ci, en
-   apparaissant, enseigne la mécanique au moment où elle devient jouable. */
+/* GÉOMÉTRIE FIXE. La barre #bj est centrée (translateX(-50%)) : un bouton qui
+   entre ou sort du flux recentre TOUTE la rangée, et le joueur qui enchaîne
+   les mises voit les jetons glisser sous son curseur. Inactifs, RÉPÉTER et
+   ENCAISSER restent donc en place à l'état fantôme (.ghost) — et leurs
+   valeurs ont une largeur réservée pour que « 5 € » ou « 1 000 € » ne fasse
+   pas respirer la barre non plus. */
 /* deux boutons de plus dans la barre : sur une fenêtre étroite elle passe à
    la ligne au lieu d'être rognée par l'overflow:hidden du panneau */
 #bjbet{flex-wrap:wrap;justify-content:center}
 #bjbet .txtbtn b{margin-left:5px}
+#bjbet .ghost{opacity:.14;filter:saturate(.15);pointer-events:none;
+  animation:none;box-shadow:none;text-shadow:none}
+#rebet,#bankPot{transition:opacity .2s,filter .2s}
+#rebet b,#bankPot b{display:inline-block;min-width:56px;text-align:center}
 #rebet{color:#ffe9b0;border-color:rgba(255,215,120,.5);background:rgba(255,200,90,.10)}
 #rebet:hover{background:rgba(255,210,110,.22)}
 #rebet b{color:#ffd76a}
@@ -361,7 +430,6 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
    réticules sur le feutre, hologramme au-dessus de la table. Le DOM ne garde
    que les commandes, restylées en console holographique translucide. */
 #bjinfo{display:none}
-#bjcol{display:none}
 
 #bj{background:linear-gradient(180deg,rgba(24,18,8,.30),rgba(10,8,4,.42));
   border:1px solid rgba(232,196,119,.34);border-radius:8px;
@@ -392,7 +460,9 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
    garde exactement la même géométrie de bout en bout de la main — le bloc
    musique ne se déplace plus, aucun clic ne tombe sur un bouton déplacé. */
 #bjbet{transition:opacity .25s,filter .25s}
-#bjbet.off{opacity:.32;filter:saturate(.4);pointer-events:none}
+/* grisée mais CLIQUABLE : un clic hors phase doit répondre (toast),
+   pas mourir en silence — c'était le « miser 25 ne fait rien » du 18/08 */
+#bjbet.off{opacity:.32;filter:saturate(.4)}
 
 /* LA FENÊTRE DES DÉCISIONS : tirer/rester/… et l'assurance glissent dans un
    panneau séparé AU-DESSUS de la barre. Même idiome holographique. */
@@ -423,3 +493,113 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
 #volTrack{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.13);overflow:hidden}
 #volFill{display:block;height:100%;width:40%;background:linear-gradient(90deg,#ffd76a,#ffb43c);
   box-shadow:0 0 8px rgba(255,190,80,.6);transition:width .12s}
+/* ---------- CAISSE : achat de jetons (fausse carte bleue) ---------- */
+/* Le calque vit dans le HUD (pointer-events:none) : il ré-arme les siens. */
+#cbui{position:absolute;inset:0;pointer-events:auto;display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(ellipse at 50% 42%,rgba(12,8,3,.55),rgba(4,3,1,.84));backdrop-filter:blur(4px)}
+#cbui[hidden]{display:none}
+#cbPanel{width:min(400px,92vw);padding:20px 24px 14px;border-radius:10px;position:relative;
+  background:linear-gradient(180deg,rgba(32,23,10,.97),rgba(13,9,4,.98));
+  border:1px solid rgba(232,196,119,.38);
+  box-shadow:0 30px 90px rgba(0,0,0,.65),0 0 70px rgba(255,190,80,.07);
+  animation:cbin .22s ease-out}
+@keyframes cbin{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
+#cbHead{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px}
+#cbTitle b{display:block;font-weight:300;font-size:22px;letter-spacing:.3em;color:#ffe9b6;
+  text-shadow:0 0 24px rgba(255,190,80,.4)}
+#cbTitle span{font-size:9px;letter-spacing:.44em;color:#a5834a}
+#cbClose{width:26px;height:26px;padding:0;font:inherit;font-size:13px;line-height:1;cursor:pointer;
+  color:#bda067;background:none;border:1px solid rgba(232,196,119,.3);border-radius:3px;transition:.15s}
+#cbClose:hover{color:#ffe9b0;background:rgba(255,210,110,.12)}
+#cbAmts{display:flex;gap:8px;margin-bottom:14px}
+.cb-amt{flex:1;padding:8px 0;font:inherit;font-size:11px;letter-spacing:.1em;cursor:pointer;
+  color:#e8cd8d;background:rgba(255,255,255,.04);border:1px solid rgba(232,196,119,.28);border-radius:3px;transition:.15s}
+.cb-amt:hover{background:rgba(255,210,110,.12);color:#ffe9b0}
+.cb-amt.sel{color:#160f04;background:linear-gradient(180deg,#ffe9a8,#d8a63c);border-color:transparent;
+  box-shadow:0 0 16px rgba(255,196,80,.35)}
+/* la carte, dessinée : elle se remplit à mesure que le formulaire se remplit */
+#cbCard{height:118px;margin-bottom:16px;padding:14px 18px;border-radius:12px;
+  display:flex;flex-direction:column;justify-content:space-between;
+  background:linear-gradient(118deg,#38121f 0%,#5c1626 46%,#7a2b1c 100%);
+  border:1px solid rgba(255,215,140,.35);
+  box-shadow:inset 0 0 44px rgba(0,0,0,.45),0 12px 26px rgba(0,0,0,.5)}
+.cb-crow{display:flex;align-items:center;justify-content:space-between}
+.cb-crow b{font-size:9.5px;font-weight:600;letter-spacing:.3em;color:#e8c977}
+.cb-crow span{font-size:11px;letter-spacing:.18em;color:#f0dfb4}
+#cbChipIc{display:block;width:34px;height:25px;border-radius:5px;
+  background:linear-gradient(135deg,#ffe9a8,#c89a3c);
+  box-shadow:inset 0 0 0 1px rgba(110,72,10,.65),inset 0 8px 0 -6px rgba(255,255,255,.5)}
+#cbNumView{font-size:18.5px;letter-spacing:.16em;color:#f4e7c8;text-shadow:0 1px 0 rgba(0,0,0,.6)}
+/* le formulaire */
+#cbForm{display:flex;flex-direction:column;gap:11px}
+#cbForm.busy{opacity:.35;pointer-events:none}
+.cb-field{display:flex;flex-direction:column;gap:4px;flex:1;
+  font-size:9px;letter-spacing:.3em;color:#a5834a}
+.cb-field input{padding:6px 2px;font:inherit;font-size:14px;letter-spacing:.12em;color:#ffe9b6;
+  background:none;border:0;border-bottom:1px solid rgba(232,196,119,.3);outline:none;transition:border-color .15s}
+.cb-field input::placeholder{color:#6f5a30;letter-spacing:.08em}
+.cb-field input:focus{border-bottom-color:#ffd76a}
+.cb-field input.bad{border-bottom-color:#c0392b;animation:cbshake .3s ease}
+@keyframes cbshake{25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+.cb-row{display:flex;gap:18px}
+#cbPay{margin-top:6px;padding:11px 0;font-size:12px;letter-spacing:.22em;
+  color:#160f04;background:linear-gradient(180deg,#ffe9a8,#d8a63c);
+  box-shadow:0 0 22px rgba(255,196,80,.3)}
+/* l'état d'autorisation recouvre le formulaire */
+#cbStatus{position:absolute;inset:auto 24px 58px;display:flex;align-items:center;justify-content:center;gap:10px;
+  padding:12px;border-radius:4px;font-size:11.5px;letter-spacing:.18em;color:#e8cd8d;
+  background:rgba(10,7,3,.92);border:1px solid rgba(232,196,119,.3)}
+#cbStatus[hidden]{display:none}
+#cbStatus.ok{color:#b8ecc2;border-color:rgba(110,220,140,.45)}
+#cbStatus.err{color:#ffb3ab;border-color:rgba(200,70,60,.5)}
+#cbSpin{width:13px;height:13px;border-radius:50%;flex:none;
+  border:2px solid rgba(255,215,140,.25);border-top-color:#ffd76a;animation:cbspin .8s linear infinite}
+#cbStatus.ok #cbSpin,#cbStatus.err #cbSpin{display:none}
+@keyframes cbspin{to{transform:rotate(360deg)}}
+#cbNote{margin-top:12px;text-align:center;font-size:8.5px;letter-spacing:.14em;color:#6b5228}
+
+/* ---------- LES MAINS DOUBLÉES À PLAT (HUD classique) ---------- */
+/* Le réticule au feutre donne le geste ; ce panneau donne la CERTITUDE. Les
+   mêmes cartes, à plat, hors perspective : le joueur n'a plus à décoder un
+   éventail vu de trois quarts pour savoir ce qu'il tient. Ancré EN BAS À
+   DROITE, au-dessus du compteur d'images et à côté de la barre de mise : le
+   regard qui descend vers ses boutons le croise sans quitter le jeu, et il ne
+   couvre ni le tapis (centre bas) ni la chaleur (haut droite). */
+#bjhand{position:absolute;right:26px;bottom:92px;pointer-events:none;
+  display:flex;flex-direction:column;gap:9px;padding:14px 18px 12px;border-radius:7px;
+  background:linear-gradient(180deg,rgba(14,10,4,.72),rgba(6,4,2,.86));
+  border:1px solid rgba(190,150,75,.30);backdrop-filter:blur(8px);
+  box-shadow:0 12px 40px rgba(0,0,0,.62),inset 0 0 22px rgba(255,196,80,.04)}
+#bjhand .bjh-row{display:flex;align-items:center;gap:14px;min-height:52px;
+  padding:4px 8px;border-radius:5px;border:1px solid transparent;transition:border-color .2s,background .2s}
+/* la main qui joue s'allume : au split, on sait laquelle on décide */
+#bjhand .bjh-row.active{border-color:rgba(255,215,120,.45);background:rgba(255,200,90,.07)}
+#bjhand .bjh-lbl{flex:none;width:80px;font-size:10.5px;font-weight:400;letter-spacing:.22em;
+  color:#9d7c3f;text-transform:uppercase}
+#bjhand .bjh-row.active .bjh-lbl{color:#e8c977}
+#bjhand .bjh-cards{display:flex;gap:4px;min-width:148px}
+#bjhand .bjh-tot{flex:none;min-width:44px;text-align:right;font-size:26px;letter-spacing:.04em;
+  color:#f2e7c8;text-shadow:0 0 12px rgba(255,190,80,.35)}
+#bjhand .bjh-tot.bj{color:#ffd76a;text-shadow:0 0 16px rgba(255,196,80,.8)}
+#bjhand .bjh-tot.bust{color:#ff5a45;text-shadow:0 0 14px rgba(255,60,40,.6)}
+#bjhBetRow{display:flex;align-items:center;gap:14px;padding:7px 8px 0;
+  border-top:1px solid rgba(190,150,75,.18)}
+#bjhBet{font-size:15px;letter-spacing:.1em;color:#e8cd8d}
+
+/* carte à plat : réplique miniature de l'atlas 3D (ivoire, index d'angle) */
+#bjhand .bjh-c{position:relative;display:block;width:35px;height:48px;border-radius:4px;
+  background:linear-gradient(160deg,#faf6ec,#e8e0cd);border:1px solid rgba(0,0,0,.35);
+  box-shadow:0 3px 7px rgba(0,0,0,.5);font-style:normal;color:#16161a}
+#bjhand .bjh-c.red{color:#c1272d}
+#bjhand .bjh-c b{position:absolute;top:2px;left:0;right:0;text-align:center;
+  font-size:18px;font-weight:700;line-height:1.1;font-family:Georgia,serif}
+#bjhand .bjh-c u{position:absolute;bottom:1px;left:0;right:0;text-align:center;
+  font-size:18px;line-height:1.2;text-decoration:none}
+/* la carte cachée du croupier garde son dos : elle ne doit rien laisser fuir */
+#bjhand .bjh-c.back{background:
+    repeating-linear-gradient(45deg,rgba(255,215,120,.16) 0 3px,transparent 3px 6px),
+    linear-gradient(160deg,#7a1d24,#4a1015);
+  border-color:rgba(232,196,119,.4)}
+/* la carte qui vient d'arriver se pose */
+@keyframes bjhdeal{from{opacity:0;transform:translateY(-7px) scale(.86)}to{opacity:1;transform:none}}
+#bjhand .bjh-c{animation:bjhdeal .22s ease-out}

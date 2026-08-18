@@ -79,19 +79,100 @@
 
   <!-- ============ SALON ============
        Coin bas-gauche, toujours là : les dernières phrases s'effacent seules,
-       ⏎ ouvre la saisie. Le champ est le SEUL élément cliquable du bloc — le
-       reste laisse passer la souris comme tout le HUD. -->
+       ⏎ (ou un clic sur l'indication) ouvre la saisie, et le bouton Envoyer
+       double la touche Entrée. Le reste laisse passer la souris comme le HUD. -->
   <div id="chat">
     <div id="chatLog"></div>
     <div id="chatBar" hidden>
       <span class="caret">&gt;</span>
       <input id="chatIn" type="text" maxlength="200" autocomplete="off"
              spellcheck="false" placeholder="dire quelque chose…" />
+      <button id="chatSend" type="button">Envoyer</button>
     </div>
-    <div id="chatHint"><kbd>⏎</kbd> parler</div>
+    <div id="chatHint"><kbd>Entrée</kbd> parler</div>
   </div>
 
   <div id="drinkFx"></div>
+
+  <!-- ============ CAISSE : achat de jetons ============
+       Fausse interface de paiement par carte : rien n'est vérifié au-delà de
+       la forme, rien ne part nulle part — c'est un accessoire de jeu, et la
+       fenêtre le dit. La carte dessinée se remplit à mesure qu'on tape. -->
+  <div id="cbui" hidden>
+    <div id="cbPanel">
+      <div id="cbHead">
+        <div id="cbTitle"><b>CAISSE</b><span>ACHAT DE JETONS</span></div>
+        <button id="cbClose" type="button" title="Fermer (Échap)">✕</button>
+      </div>
+      <div id="cbAmts">
+        <button type="button" class="cb-amt" data-v="100">100&nbsp;€</button>
+        <button type="button" class="cb-amt sel" data-v="500">500&nbsp;€</button>
+        <button type="button" class="cb-amt" data-v="1000">1&nbsp;000&nbsp;€</button>
+        <button type="button" class="cb-amt" data-v="5000">5&nbsp;000&nbsp;€</button>
+      </div>
+      <div id="cbCard">
+        <div class="cb-crow"><i id="cbChipIc"></i><b>BANQUE DU MIRAGE</b></div>
+        <div id="cbNumView">•••• •••• •••• ••••</div>
+        <div class="cb-crow"><span id="cbNameView">VOTRE NOM</span><span id="cbExpView">MM/AA</span></div>
+      </div>
+      <form id="cbForm" autocomplete="off">
+        <label class="cb-field">NUMÉRO DE CARTE
+          <input id="cbNum" inputmode="numeric" placeholder="4000 1234 5678 9010" maxlength="19" spellcheck="false"/>
+        </label>
+        <label class="cb-field">TITULAIRE
+          <input id="cbName" placeholder="M. DUPONT" maxlength="26" spellcheck="false"/>
+        </label>
+        <div class="cb-row">
+          <label class="cb-field">EXPIRE FIN
+            <input id="cbExp" inputmode="numeric" placeholder="MM/AA" maxlength="5"/>
+          </label>
+          <label class="cb-field">CVV
+            <input id="cbCvv" inputmode="numeric" placeholder="123" maxlength="3"/>
+          </label>
+        </div>
+        <button id="cbPay" class="mainbtn" type="submit">PAYER 500 €</button>
+      </form>
+      <div id="cbStatus" hidden><i id="cbSpin"></i><span id="cbStatusTxt"></span></div>
+      <div id="cbNote">Démonstration — aucun paiement réel, aucune donnée transmise.</div>
+    </div>
+  </div>
+
+  <!-- LES MAINS, DOUBLÉES À PLAT.
+       La table 3D reste la scène, mais un joueur doit pouvoir LIRE son jeu
+       sans le déchiffrer en perspective : mêmes cartes, mêmes totaux, posés
+       hors 3D dans un coin. Le réticule au feutre donne l'ambiance, ce panneau
+       donne la certitude. -->
+  <div id="bjhand" hidden>
+    <div class="bjh-row" id="bjhDealer">
+      <b class="bjh-lbl">CROUPIER</b>
+      <span class="bjh-cards"></span>
+      <span class="bjh-tot">—</span>
+    </div>
+    <div class="bjh-row" id="bjhMain">
+      <b class="bjh-lbl">VOUS</b>
+      <span class="bjh-cards"></span>
+      <span class="bjh-tot">—</span>
+    </div>
+    <div class="bjh-row" id="bjhSplit" hidden>
+      <b class="bjh-lbl">MAIN 2</b>
+      <span class="bjh-cards"></span>
+      <span class="bjh-tot">—</span>
+    </div>
+    <div id="bjhBetRow"><b class="bjh-lbl">MISE</b><span id="bjhBet">0 €</span></div>
+  </div>
+
+  <!-- Message de table + chrono : bandeau FIXE en haut de l'écran, centré.
+       Sorti du panneau #bj (et de la scène 3D : l'hologramme au-dessus du
+       feutre dérivait avec la caméra — le texte doit se lire d'un coup d'œil,
+       toujours au même endroit). -->
+  <div id="bjtop" hidden>
+    <div id="bjmsg"></div>
+    <div id="bjtimer" hidden><div id="bjtimerfill"></div></div>
+    <!-- LA RÉSERVE DE TEMPS, sous le chrono : autant de barres que le joueur
+         en a encore. Elle est LUE au moment où le chrono devient rouge — donc
+         elle doit vivre juste dessous, pas dans un coin d'écran. -->
+    <div id="bjbank" hidden><span id="bjbankpips"></span><b id="bjbanklbl">RÉSERVE</b></div>
+  </div>
 
   <!-- Blackjack panel -->
   <div id="bj" hidden>
@@ -99,10 +180,6 @@
       <div class="row"><span class="lbl">CROUPIER</span><span id="dealerVal">—</span></div>
       <div class="row"><span class="lbl">VOUS</span><span id="playerVal">—</span></div>
       <div class="row"><span class="lbl">MISE</span><span id="betVal">0 €</span></div>
-    </div>
-    <div id="bjcol">
-      <div id="bjmsg"></div>
-      <div id="bjtimer" hidden><div id="bjtimerfill"></div></div>
     </div>
     <div id="bjbet">
       <div class="betlabel">MISER&nbsp;:</div>
@@ -112,11 +189,13 @@
       <button class="chipbtn c500" data-v="500">500</button>
       <button id="side21" class="txtbtn" title="Vos 2 cartes + la carte visible du croupier : brelan 30:1, suite 10:1, couleur 5:1… Un brelan assorti emporte le JACKPOT DU PIT.">21+3 <b id="sideval"></b></button>
       <button id="clearBet" class="txtbtn">Retirer</button>
-      <!-- Les deux boutons qui vont et viennent sont en BOUT de barre : rien
-           de ce qui précède ne bouge quand ils apparaissent, aucun clic ne
-           tombe sur un bouton qui vient de se déplacer. -->
-      <button id="rebet" class="txtbtn" hidden title="Reposer la mise du coup précédent (R ou Espace)">RÉPÉTER <b id="rebetval"></b></button>
-      <button id="bankPot" class="txtbtn" hidden title="Encaisser la cagnotte de série (C) — elle est acquise, mais la série repart de zéro">ENCAISSER <b id="bankval"></b></button>
+      <!-- Ces deux boutons ne disparaissent JAMAIS du flux : inactifs, ils
+           restent en place à l'état fantôme (.ghost). La barre garde ainsi la
+           même géométrie avant et après la mise — on peut enchaîner RÉPÉTER
+           sans que le bouton bouge sous le curseur. -->
+      <button id="rebet" class="txtbtn ghost" disabled title="Reposer la mise du coup précédent (R ou Espace)">RÉPÉTER <b id="rebetval">—</b></button>
+      <button id="bankPot" class="txtbtn ghost" disabled title="Encaisser la cagnotte de série (C) — elle est acquise, mais la série repart de zéro">ENCAISSER <b id="bankval">—</b></button>
+      <button id="buyTime" class="txtbtn ghost" disabled title="Racheter une barre de temps additionnel (B) — 10 €, entre deux manches, et seulement une fois la vôtre consommée. Elle vous laisse 20 s de plus quand le chrono expire.">+TEMPS <b id="buytimeval">—</b></button>
     </div>
     <div id="bjsound">
       <button id="ambBtn" class="sndbtn" title="Changer d'ambiance sonore"><i>♪</i><b id="ambName">—</b></button>

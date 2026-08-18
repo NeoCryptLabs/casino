@@ -22,6 +22,8 @@ import { createMenu, menuIsOpen } from "./menu.js";
 import { createChat } from "./chat.js";
 import { createDealerVoice } from "./dealer.js";
 import { createJackpot } from "./jackpot.js";
+import { buildVenues } from "./venues.js";
+import { createCashierUI } from "./cashier.js";
 
 const B = BABYLON;
 const $ = (id) => document.getElementById(id);
@@ -117,7 +119,11 @@ async function boot() {
 
   setProgress(64, "Le bar…");
   await frame();
-  const bar = buildBar(scene, world, audio, people);
+  const bar = await buildBar(scene, world, audio, people);
+
+  setProgress(65, "Roulettes, restaurant, salon VIP…");
+  await frame();
+  const venues = buildVenues(scene, world, people);
 
   setProgress(66, "La scène…");
   await frame();
@@ -144,7 +150,7 @@ async function boot() {
 
   // sol physique
   if (havokOK) {
-    const pFloor = B.MeshBuilder.CreateBox("pFloor", { width: 60, height: 0.4, depth: 50 }, scene);
+    const pFloor = B.MeshBuilder.CreateBox("pFloor", { width: 70, height: 0.4, depth: 55 }, scene);
     pFloor.position.y = -0.2; pFloor.isVisible = false;
     new B.PhysicsAggregate(pFloor, B.PhysicsShapeType.BOX, { mass: 0, restitution: 0.1, friction: 0.9 }, scene);
   }
@@ -247,7 +253,7 @@ async function boot() {
   scene.environmentIntensity = 1.95;
   setTimeout(() => { probe.refreshRate = B.RenderTargetTexture.REFRESHRATE_RENDER_ONCE; }, 1500);
 
-  raiseLightLimit(scene, 10);  // pit (2) + projecteurs de scène (2)
+  raiseLightLimit(scene, 12);  // pit (2) + scène (2) + restaurant/VIP/caisse
 
   // LA CHALEUR — le multiplicateur de série rendu comme un incendie. Créée ici
   // et pas avec la table : elle a besoin de la caméra du joueur (distorsion,
@@ -311,12 +317,27 @@ async function boot() {
     // on voyait ses cartes et ses jetons distribués sur le CÔTÉ de l'image.
     // Même formule pour chaque place, orientée de SA chaise vers le centre.
     bjs.forEach((t, i) => {
-      t.SEATS.forEach((_, si) => {
+      t.SEATS.forEach((s, si) => {
         if (t.NPC_SEATS.includes(si)) return;    // place du figurant : pas de caméra
-        const seatW = t.seatPos(si), c = t.tableCenter();
-        const dir = c.subtract(seatW); dir.y = 0; dir.normalize();
-        const pos = seatW.add(dir.scale(0.32)); pos.y = 1.49;
-        const look = seatW.add(dir.scale(1.42)); look.y = 0.95;
+        // Ancrée sur la ZONE DE JEU, pas sur la chaise : en bord d'ovale, les
+        // cartes sont ~25 % plus loin de la chaise qu'au centre — à distance
+        // fixe de la chaise, tout paraissait loin.
+        // L'œil se règle sur SA PILE DE JETONS, l'objet le plus proche du
+        // cadre : 0,42 m derrière (invariant de la place centrale). Ancré sur
+        // les cartes, il se retrouvait en bord d'ovale presque au-dessus de la
+        // pile, qui sortait par le bas de l'image. La visée, elle, reste sur
+        // les cartes (0,22 m au-delà) : le croupier tient dans le haut.
+        const seatW = t.seatPos(si);
+        const spotW = t.toWorld(s.cardSpot);
+        const chipW = t.toWorld(s.chipSpot);
+        const dir = spotW.subtract(seatW); dir.y = 0; dir.normalize();
+        // MESURÉ le 18/08 : à 0,42 m derrière la pile, celle-ci se projetait à
+        // v ≈ −1,0 — sous le bord de l'image, DERRIÈRE la barre de mise. On
+        // gagnait « +300 € » sans voir un jeton. Œil reculé à 0,60 m et visée
+        // abaissée : la pile remonte à v ≈ −0,6, cercle et réserve dans le
+        // cadre, le croupier garde le haut.
+        const pos = chipW.subtract(dir.scale(0.60)); pos.y = 1.49;
+        const look = spotW.add(dir.scale(0.22)); look.y = 0.90;
         mkCam("table" + i + ":" + si, pos, look, 0.94);
       });
     });
@@ -359,6 +380,15 @@ async function boot() {
   // le décor ensuite) est pilotée par le réglage « Ombres » — voir settings.js.
   scene.skipPointerMovePicking = true;
   engine.enableOfflineSupport = false;
+  // Le TEST de visibilité lui-même a un prix : pour chaque mesh, chaque frame,
+  // Babylon vérifie sphère PUIS boîte englobante. La stratégie « inclusion
+  // optimiste + sphère seule » coupe ce travail de moitié — au pire quelques
+  // meshes en bord de champ sont dessinés pour rien, rien ne change à l'image.
+  {
+    const cs = B.AbstractMesh.CULLINGSTRATEGY_OPTIMISTIC_INCLUSION_THEN_BSPHERE_ONLY;
+    for (const m of scene.meshes) m.cullingStrategy = cs;
+    scene.onNewMeshAddedObservable.add((m) => { m.cullingStrategy = cs; });
+  }
 
   setProgress(100, "Prêt");
   await frame();
@@ -370,6 +400,8 @@ async function boot() {
   // Le salon existe AVANT la liaison : sans serveur il reste utilisable et
   // répond « hors ligne » plutôt que d'avaler ce qu'on tape.
   const chat = createChat({ player, audio });
+  // les piques du croupier partent dans le salon — créé après la voix
+  dealerVoice.setChat(chat);
 
   // Multijoueur : purement optionnel. Sans serveur WebSocket en face, `Net`
   // retente en arrière-plan et le jeu tourne exactement comme avant.
@@ -565,6 +597,11 @@ async function boot() {
     },
   });
 
+  // LA CAISSE — fausse interface de paiement par carte : elle crédite le solde
+  // (canal wallet, le serveur borne) et pose les jetons sur le marbre du
+  // guichet. Voir cashier.js ; la zone E vit dans venues.js (buildCashier).
+  const cashierUI = createCashierUI({ state, ui, audio, net, chips, player, venues });
+
   let hovered = null, tick = 0, devStreakIdx = 0, fpsT = 0;
   scene.onBeforeRenderObservable.add(() => {
     const dt = Math.min(0.05, engine.getDeltaTime() / 1000);
@@ -578,6 +615,7 @@ async function boot() {
     heat.tick(dt);
     editor.tick(dt);
     bar.tick(dt, p);
+    venues.tick?.(dt, p);
     for (const c of cards.live) c.tick(dt);
 
     audio.setWaterDistance(B.Vector3.Distance(p, fountain.center));
@@ -634,6 +672,12 @@ async function boot() {
   /* ------------------------------------------------------------- entrées */
 
   addEventListener("keydown", async (e) => {
+    // LE GUICHET AVANT TOUT : ouvert, on y tape un numéro de carte, pas une
+    // direction de marche — il avale donc tout le clavier, Échap le referme.
+    if (cashierUI.isOpen()) {
+      if (e.code === "Escape") cashierUI.close();
+      return;
+    }
     // LE SALON D'ABORD, avant tout le reste. Ouvert, il prend TOUT le clavier :
     // sinon taper « chaud » ferait marcher le joueur (ZQSD), demanderait une
     // carte (H) et déclencherait la triche de chaleur (M). Fermé, il ne
@@ -663,7 +707,7 @@ async function boot() {
       } else if (state.mode !== "table") {
         ui.toast("DEV — asseyez-vous à une table de blackjack d'abord");
       } else {
-        const cycle = [0, 1, 2, 3, 5];
+        const cycle = [0, 1, 2, 3, 7];
         devStreakIdx = (devStreakIdx + 1) % cycle.length;
         net.bj("devstreak", { value: cycle[devStreakIdx] });
         ui.toast("DEV — série " + cycle[devStreakIdx] + " : " +
@@ -692,15 +736,16 @@ async function boot() {
       if (e.code === "KeyR" || e.code === "Space") {
         net.bj(bj && bj.G.phase === "betting" ? "rebet" : "stand");
       }
-      if (e.code === "KeyC") net.bj("bank");        // encaisser la cagnotte
+      if (e.code === "KeyC") tryBank();             // encaisser la cagnotte
+      if (e.code === "KeyB") tryBuyTime();          // racheter une barre de temps
       if (e.code === "KeyD") net.bj("double");
       if (e.code === "KeyS") net.bj("split");
       if (e.code === "KeyO") net.bj("insure");
       if (e.code === "KeyN") net.bj("noinsure");
-      if (e.code === "Digit1") net.bj("bet", { value: 5 });
-      if (e.code === "Digit2") net.bj("bet", { value: 25 });
-      if (e.code === "Digit3") net.bj("bet", { value: 100 });
-      if (e.code === "Digit4") net.bj("bet", { value: 500 });
+      if (e.code === "Digit1") tryBet(5);
+      if (e.code === "Digit2") tryBet(25);
+      if (e.code === "Digit3") tryBet(100);
+      if (e.code === "Digit4") tryBet(500);
     }
   });
 
@@ -716,7 +761,41 @@ async function boot() {
     // perdrait le clavier en pleine phrase, et les touches repartiraient
     // dans les jambes du joueur.
     if (chat.isOpen()) return;
+    if (cashierUI.isOpen()) return;
     if (state.mode === "walk" && !player.locked) player.lock();
+    if (state.mode === "table") {
+      const c = pickBankChip();
+      if (c) tryBet(c.metadata.value);
+    }
+  });
+
+  /* MISER EN POUSSANT SES JETONS — assis à la table la souris est libre :
+   * cliquer une colonne de SA banque (metadata.keep) mise un jeton de cette
+   * valeur, exactement comme le bouton du HUD. Seule la banque du joueur est
+   * cliquable : ni les mises déjà posées, ni les jetons des PNJ. */
+  function pickBankChip() {
+    const p = scene.pick(scene.pointerX, scene.pointerY,
+      (m) => m.metadata?.chip && m.metadata?.keep);
+    return p?.hit ? p.pickedMesh : null;
+  }
+  // au survol : toute la colonne s'allume et le curseur devient une main —
+  // sans ça, rien ne dit que ces jetons-là se laissent pousser
+  let chipGlowVal = 0;
+  const CHIP_GLOW = new B.Color3(1, 0.82, 0.35);
+  function setChipGlow(v) {
+    chipGlowVal = v;
+    for (const m of chips.pool) {
+      const on = !!v && m.metadata?.keep && m.metadata.value === v;
+      m.renderOutline = on;
+      if (on) { m.outlineColor = CHIP_GLOW; m.outlineWidth = 0.0016; }
+    }
+    canvas.style.cursor = v ? "pointer" : "";
+  }
+  canvas.addEventListener("pointermove", () => {
+    if (state.mode !== "table") { if (chipGlowVal) setChipGlow(0); return; }
+    const c = pickBankChip();
+    const v = c ? c.metadata.value : 0;
+    if (v !== chipGlowVal) setChipGlow(v);
   });
 
   /** Une place tenue par un AUTRE joueur ne peut pas être prise. */
@@ -738,6 +817,7 @@ async function boot() {
       return;
     }
     if (meta.interact === "bar") return doDrink();
+    if (meta.interact === "cashier") return cashierUI.open();
     if (meta.interact === "slot") return enterSlot(meta.target);
     if (meta.interact === "blackjack") return sitTable(meta.seat, meta.table || 0);
     if (meta.interact === "seat") return sitStool(meta);
@@ -923,6 +1003,7 @@ async function boot() {
     state.safePos = seatExit(tableIdx, seat);
     player.unlock();
     $("bj").hidden = false;
+    $("bjtop").hidden = false;
     pipe.imageProcessing.vignetteWeight = 5.2;
     // ambiance « scène » : on baisse les lumières autour
     world.lights.slots.intensity = 34;
@@ -980,7 +1061,11 @@ async function boot() {
       || (parts[0] === "blackjack" && parts.length === 3
         ? seatExit(Number(parts[1]), Number(parts[2])) : null);
     bj.leave(); net.bj("leave");
+    setChipGlow(0);
     $("bj").hidden = true;
+    $("bjtop").hidden = true;
+    $("bjmsg").textContent = "";     // un « GAGNÉ » figé ne doit pas ressortir à la table suivante
+    ui.setHands(null);
     pipe.depthOfFieldEnabled = false;
     pipe.imageProcessing.vignetteWeight = 2.6;
     world.lights.slots.intensity = 80;
@@ -990,14 +1075,50 @@ async function boot() {
     player.stand(() => { state.mode = "walk"; player.lock(); }, back);
   }
 
+  /** Miser avec retour : un clic hors phase de mise était avalé SANS UN MOT
+   *  (le serveur l'ignore à raison — mais le joueur, lui, croyait à un bug). */
+  function tryBet(v) {
+    if (bj && bj.G.phase !== "betting") {
+      audio.lose();
+      return ui.toast("Un instant — misez quand « Faites vos jeux » s'affiche", "lose");
+    }
+    net.bj("bet", { value: v }); audio.ui();
+  }
+  /** Encaisser la cagnotte : seulement entre deux manches, et on le DIT. */
+  function tryBank() {
+    if (bj && bj.G.phase !== "betting" && bj.G.phase !== "payout") {
+      audio.lose();
+      return ui.toast("La cagnotte s'encaisse entre deux manches — elle reste à vous", "lose");
+    }
+    net.bj("bank"); audio.ui();
+  }
+  /**
+   * RACHETER UNE BARRE DE TEMPS. Entre deux manches seulement — on achète son
+   * filet à froid (voir buyTime, côté serveur). Le refus est DIT : un clic
+   * avalé en silence pendant sa propre décision passerait pour une panne.
+   */
+  function tryBuyTime() {
+    if (bj && bj.G.phase !== "betting" && bj.G.phase !== "payout") {
+      audio.lose();
+      return ui.toast("Le temps se rachète entre deux manches, pas pendant la vôtre", "lose");
+    }
+    net.bj("buytime"); audio.ui();
+  }
   document.querySelectorAll(".chipbtn").forEach((b) =>
-    (b.onclick = () => { net.bj("bet", { value: parseInt(b.dataset.v, 10) }); audio.ui(); }));
-  $("clearBet").onclick = () => net.bj("clearbet");
-  $("side21").onclick = () => { net.bj("sidebet", { value: 25 }); audio.ui(); };
+    (b.onclick = () => tryBet(parseInt(b.dataset.v, 10))));
+  $("clearBet").onclick = () => {
+    if (bj && bj.G.phase !== "betting") return ui.toast("La manche est lancée — les mises sont sur le feutre", "lose");
+    net.bj("clearbet");
+  };
+  $("side21").onclick = () => {
+    if (bj && bj.G.phase !== "betting") return ui.toast("21+3 se joue avant la donne — attendez « Faites vos jeux »", "lose");
+    net.bj("sidebet", { value: 25 }); audio.ui();
+  };
   // RÉPÉTER : le raccourci de la boucle. Sans lui, chaque manche repart d'un
   // empilage de jetons à la main — c'est le seul vrai frein à l'enchaînement.
   $("rebet").onclick = () => { net.bj("rebet"); audio.ui(); };
-  $("bankPot").onclick = () => { net.bj("bank"); audio.ui(); };
+  $("bankPot").onclick = () => tryBank();
+  $("buyTime").onclick = () => tryBuyTime();
   $("hit").onclick = () => net.bj("hit");
   $("stand").onclick = () => net.bj("stand");
   $("double").onclick = () => net.bj("double");
@@ -1038,6 +1159,49 @@ async function boot() {
       floatSig = sig;
       f.hidden = !sig;
     };
+    /* ---- LES MAINS DOUBLÉES À PLAT ----
+       Le feutre 3D porte le geste, ce panneau porte la LECTURE : les mêmes
+       cartes, à plat, hors perspective, avec leur total. Rien n'y est calculé —
+       tout vient de la photo du serveur relayée par la table. */
+    const SUIT_CH = ["\u2660", "\u2665", "\u2666", "\u2663"];   // ordre de l'atlas 3D
+    const RED_SUIT = new Set([1, 2]);                    // cœur, carreau
+    // Une carte ne se redessine QUE si elle change : sans cette mémoire, chaque
+    // photo serveur (plusieurs par seconde) rejouerait l'animation de pose et
+    // la main clignoterait en permanence. Et comme une main ne fait que
+    // GRANDIR, on n'ajoute que les cartes neuves — seules elles se posent.
+    const shown = { dealer: [], 0: [], 1: [] };
+    const keyOf = (c) => (c ? c.r + ":" + c.s : "?");
+
+    function cardEl(c) {
+      const el = document.createElement("i");
+      if (!c) { el.className = "bjh-c back"; return el; }   // le dos du croupier
+      el.className = "bjh-c" + (RED_SUIT.has(c.s) ? " red" : "");
+      const b = document.createElement("b"); b.textContent = c.r;
+      const u = document.createElement("u"); u.textContent = SUIT_CH[c.s] || "";
+      el.append(b, u);
+      return el;
+    }
+
+    function paintRow(row, key, hand) {
+      if (!hand) { row.hidden = true; shown[key] = []; return; }
+      row.hidden = false;
+      row.classList.toggle("active", !!hand.active);
+      const tot = row.querySelector(".bjh-tot");
+      tot.textContent = hand.label ?? (hand.total || "—");
+      tot.className = "bjh-tot" + (hand.total > 21 ? " bust"
+        : hand.total === 21 ? " bj" : "");
+      const box = row.querySelector(".bjh-cards");
+      const now = hand.cards.map(keyOf), was = shown[key];
+      // la carte cachée du croupier se RETOURNE : son dos change de valeur,
+      // donc le préfixe ne colle plus et la ligne se refait — c'est voulu
+      const grew = now.length >= was.length && was.every((k, i) => k === now[i]);
+      if (!grew) { box.textContent = ""; }
+      for (let i = grew ? was.length : 0; i < hand.cards.length; i++) {
+        box.appendChild(cardEl(hand.cards[i]));
+      }
+      shown[key] = now;
+    }
+
     // ODOMÈTRE : la caisse ne saute pas, elle DÉFILE — et chaque cran de gain
     // fait son tic de pièce. Compter ses gains est la moitié du plaisir.
     let shownCash = null, cashRaf = 0, lastCoin = 0;
@@ -1067,10 +1231,26 @@ async function boot() {
       // le HUD de table vit en RÉALITÉ AUGMENTÉE dans la scène : ces setters
       // écrivent encore le DOM (caché, utile au debug) et surtout miroir vers
       // la projection 3D de la table où le joueur est assis
-      setBet(v) { $("betVal").textContent = fmt(v) + " €"; bj?.arBet?.(v); },
+      setBet(v) {
+        $("betVal").textContent = fmt(v) + " €";
+        $("bjhBet").textContent = fmt(v) + " €";
+        bj?.arBet?.(v);
+      },
+      /**
+       * Réplique 2D des mains — le « HUD classique » qui double la table 3D.
+       * @param {?{dealer:object, main:object, split:?object}} h null = range le
+       *   panneau (debout, ou aucune carte sur le feutre).
+       */
+      setHands(h) {
+        $("bjhand").hidden = !h;
+        if (!h) { shown.dealer = []; shown[0] = []; shown[1] = []; return; }
+        paintRow($("bjhDealer"), "dealer", h.dealer);
+        paintRow($("bjhMain"), 0, h.main);
+        paintRow($("bjhSplit"), 1, h.split);
+      },
       setPlayerVal(v) { $("playerVal").textContent = v; },
       setDealerVal(v) { $("dealerVal").textContent = v; },
-      msg(t) { $("bjmsg").textContent = t; bj?.arMsg?.(t); },
+      msg(t) { $("bjmsg").textContent = t; },
       // plus de bouton « Distribuer » : la table part d'elle-même à la fin
       // des mises, côté serveur. Conservé en no-op pour les appelants.
       enableDeal() { },
@@ -1097,23 +1277,58 @@ async function boot() {
         if (sv) sv.textContent = txt;
       },
       /**
-       * RÉPÉTER LA MISE. Le bouton n'apparaît que lorsqu'il y a quelque chose à
-       * répéter ET que le cercle est net : ailleurs il mentirait, et un joueur
-       * qui clique un bouton sans effet cesse de le croire.
+       * RÉPÉTER LA MISE. Inactif, le bouton reste EN PLACE à l'état fantôme
+       * (.ghost) au lieu de sortir du flux : la barre est centrée
+       * (translateX(-50%)), tout bouton qui apparaît ou disparaît recentre
+       * toute la rangée — et le joueur qui enchaîne les mises voit sa cible se
+       * dérober sous le curseur. La géométrie ne doit JAMAIS changer.
        * @param {number} v total à reposer (mise + 21+3), 0 = rien à répéter
        */
       setRebet(v) {
         const b = $("rebet");
         if (!b) return;
-        b.hidden = !v;
-        if (v) $("rebetval").textContent = fmt(v) + " €";
+        b.classList.toggle("ghost", !v);
+        b.disabled = !v;
+        $("rebetval").textContent = v ? fmt(v) + " €" : "—";
       },
-      /** ENCAISSER LA CAGNOTTE. Même règle : visible seulement s'il y a de quoi. */
+      /** ENCAISSER LA CAGNOTTE. Même règle : fantôme quand il n'y a rien. */
       setBank(v) {
         const b = $("bankPot");
         if (!b) return;
-        b.hidden = !v;
-        if (v) $("bankval").textContent = fmt(v) + " €";
+        b.classList.toggle("ghost", !v);
+        b.disabled = !v;
+        $("bankval").textContent = v ? fmt(v) + " €" : "—";
+      },
+      /**
+       * LA RÉSERVE DE TEMPS, sous le chrono du bandeau.
+       *
+       * Une barre par sursis encore disponible, et RIEN d'autre : pas de
+       * compteur chiffré, pas de jauge à moitié pleine. Ce filet est
+       * tout-ou-rien, l'afficher autrement laisserait croire qu'on peut en
+       * dépenser la moitié. Vide, la ligne reste — barrée et éteinte : c'est
+       * l'information qui compte, « il ne t'en reste plus ».
+       * @param {number} n barres en réserve
+       * @param {boolean} on sursis en cours
+       */
+      setTimeBank(n, on = false) {
+        const el = $("bjbank");
+        if (!el) return;
+        const seated = state.mode === "table";
+        el.hidden = !seated;
+        if (!seated) return;
+        el.classList.toggle("on", !!on);
+        el.classList.toggle("empty", !n);
+        $("bjbankpips").innerHTML = n > 0 ? "<i></i>".repeat(n) : "<i class='off'></i>";
+        $("bjbanklbl").textContent = on ? "TEMPS ADDITIONNEL"
+          : n > 0 ? "RÉSERVE" : "RÉSERVE ÉPUISÉE";
+      },
+      /** +TEMPS. Fantôme quand on ne peut pas acheter — géométrie fixe. */
+      setBuyTime(price) {
+        const b = $("buyTime");
+        if (!b) return;
+        b.classList.toggle("ghost", !price);
+        b.disabled = !price;
+        $("buytimeval").textContent = price ? fmt(price) + " €" : "—";
       },
       toast(t, cls = "") {
         const el = $("toast");
@@ -1144,8 +1359,8 @@ async function boot() {
   });
   window.__game = {
     scene, engine, state, player, bjs, get bj() { return bj; },
-    chips, cards, bar, machines, fountain, world, pipe, ui, heat, editor, layout, camActors, stage, concert,
-    menu, settings,
+    chips, cards, bar, machines, fountain, world, pipe, ui, heat, editor, layout, camActors, stage, concert, venues,
+    menu, settings, cashierUI,
     sitTable, leaveTable, enterSlot, leaveSlot, doDrink, sitStool, standUp,
   };
 

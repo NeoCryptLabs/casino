@@ -36,6 +36,10 @@ const CLIPS_DISABLED = false;
 export const OUTFITS = {
   dealer: { vest: "#141419", trim: "#c9a227", visor: true, garters: true, body: false },
   bar: { vest: "#5c1420", trim: "#d8c07a", visor: false, garters: true, body: false },
+  // vestiaire : nœud papillon et rien d'autre. Ni visière (c'est un croupier
+  // qui en porte une), ni manchettes (c'est un barman) — la préposée doit se
+  // distinguer des deux au premier coup d'œil.
+  cloak: { vest: "#1a1420", trim: "#c9a227", visor: false, garters: false, body: false },
 };
 
 /**
@@ -186,6 +190,11 @@ export class People {
     const avatar = await tryLoad(scene, "assets/player.glb");
     if (avatar) kits.push({ url: "assets/player.glb", container: avatar, male: true, avatar: true });
     else console.info("[casino] assets/player.glb absent : avatars sans animation");
+    // Avatar féminin : même contrat que player.glb (rig mixamorig + clips
+    // idle/walk). Chaque joueur distant tire l'un des deux kits au sort.
+    const avatarF = await tryLoad(scene, "assets/player_f.glb");
+    if (avatarF) kits.push({ url: "assets/player_f.glb", container: avatarF, male: false, avatar: true });
+    else console.info("[casino] assets/player_f.glb absent : avatars tous masculins");
 
     // LA CHANTEUSE. Modèle dédié, riggé sur le MÊME squelette Mixamo que
     // `player.glb` : elle hérite donc de ses clips `idle`/`walk`. Sans ce
@@ -238,7 +247,26 @@ export class People {
     }
     scene.onAfterAnimationsObservable.add(() => {
       const dt = Math.min(0.05, scene.getEngine().getDeltaTime() / 1000);
-      for (const n of this.list) n._pose(dt);
+      // perf : la micro-pose (respiration, regard) est invisible de loin. Au
+      // delà de 14 m on ne l'évalue qu'une frame sur trois, en cumulant dt
+      // pour garder la même vitesse de geste — les quaternions par os ne se
+      // paient qu'autour du joueur.
+      const cam = scene.activeCamera;
+      const eye = cam && cam.globalPosition;
+      for (const n of this.list) {
+        if (eye) {
+          const dx = n.root.position.x - eye.x, dz = n.root.position.z - eye.z;
+          if (dx * dx + dz * dz > 14 * 14) {
+            n._poseAcc = (n._poseAcc || 0) + dt;
+            n._poseSkip = ((n._poseSkip || 0) + 1) % 3;
+            if (n._poseSkip) continue;
+            n._pose(Math.min(0.1, n._poseAcc));
+            n._poseAcc = 0;
+            continue;
+          }
+        }
+        n._pose(dt);
+      }
     });
   }
 
@@ -247,15 +275,18 @@ export class People {
     const scene = this.scene;
     // le personnel a son propre modèle ; les clients ne le portent jamais
     const extra = (k) => !k.staff && !k.avatar && !k.singer;
+    const bySex = () => (o.sex === "m" && this.hasMale
+      ? this.kits.filter((k) => k.male && extra(k))
+      : this.kits.filter((k) => extra(k) && (o.sex !== "f" || !k.male)));
+    // Un rôle SANS modèle dédié (vestiaire) retombe sur le choix par sexe, pas
+    // sur le premier figurant venu : sinon `sex: "f"` serait perdu en route et
+    // la préposée deviendrait un homme le jour où un male.glb est déposé.
+    const staffKits = o.role ? this.kits.filter((k) => k.staff === o.role) : [];
     const pool = o.singer
       ? this.kits.filter((k) => k.singer)
       : o.avatar
         ? this.kits.filter((k) => k.avatar)
-        : o.role
-          ? this.kits.filter((k) => k.staff === o.role)
-          : (o.sex === "m" && this.hasMale
-            ? this.kits.filter((k) => k.male && extra(k))
-            : this.kits.filter((k) => extra(k) && (o.sex !== "f" || !k.male)));
+        : staffKits.length ? staffKits : bySex();
     const kit = pick(pool.length ? pool : this.kits.filter(extra));
     const ent = kit.container.instantiateModelsToScene((n) => n, true, { doNotInstantiate: true });
     const model = ent.rootNodes[0];
@@ -308,7 +339,8 @@ export class People {
     // posture de métier, prise APRÈS la descente des bras : elle sert de base
     // aux micro-animations de `_pose`
     if (!o.seated && o.role === "dealer") npc._dealerStance();
-    else if (!o.seated && o.role === "bar") npc._barStance();
+    // au comptoir : barman, caissier ET préposée au vestiaire, même posture
+    else if (!o.seated && (o.role === "bar" || o.role === "cloak")) npc._barStance(o.counterY);
     // Les modèles de personnel dédiés sont déjà habillés (gilet, nœud papillon,
     // tablier) : l'habillage procédural ferait doublon. Il ne sert que quand on
     // est retombé sur le mannequin de repli.
@@ -440,14 +472,23 @@ class NPC {
     this._snapshot();
   }
 
-  /** Posture de barman : une main en avant sur le comptoir, l'autre au niveau du buste. */
-  _barStance() {
+  /**
+   * Posture de barman : une main en avant sur le comptoir, l'autre au niveau du buste.
+   * @param {number} [counterY] hauteur MONDE du plan de travail : si fournie
+   *   (le caissier), les mains visent 3 cm au-dessus — sans elle, un plan plus
+   *   haut que le réglage historique les noierait dans le marbre.
+   */
+  _barStance(counterY) {
     const hips = this.node("Hips");
     if (!hips) return;
     const right = this._rightAxis();
     const fwd = B.Vector3.Cross(right, B.Axis.Y).normalize();
     const h = hips.getAbsolutePosition();
     const S = this.height / 1.78;
+    // Mains basses, au-dessus du comptoir : son plateau est à 1,13 m et les
+    // hanches sont à ~0,94 m, d'où les ~0,18 m de dénivelé. Elles étaient
+    // auparavant à hauteur de poitrine, ce qui le faisait travailler en l'air.
+    const dy = counterY ? counterY + 0.03 - h.y : 0.18 * S;
     for (const side of ["Left", "Right"]) {
       const s = side === "Left" ? -1 : 1;
       const arm = this.node(side + "Arm");
@@ -458,13 +499,10 @@ class NPC {
         .add(right.scale(s * 0.19 * S))
         .add(fwd.scale(0.02 * S))
         .add(new B.Vector3(0, 0.02 * S, 0)));
-      // Mains basses, au-dessus du comptoir : son plateau est à 1,13 m et les
-      // hanches sont à ~0,94 m, d'où les ~0,18 m de dénivelé. Elles étaient
-      // auparavant à hauteur de poitrine, ce qui le faisait travailler en l'air.
       this._aim(fore, hand, h
         .add(right.scale(s * 0.09 * S))
         .add(fwd.scale(0.34 * S))
-        .add(new B.Vector3(0, 0.18 * S, 0)));
+        .add(new B.Vector3(0, dy, 0)));
     }
     this._snapshot();
   }

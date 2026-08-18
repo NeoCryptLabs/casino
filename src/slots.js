@@ -1,6 +1,7 @@
 /** Machines à sous : cabinets PBR, rouleaux 3D animés, levier, marquee néon, gains. */
 import { V3, C3, pbr, gold, canvasTex, rnd, rndInt, pick, animFloat, wait } from "./util.js";
 import { LAYOUT } from "./world.js";
+import { loadKit, place } from "./venues.js";
 const B = BABYLON;
 
 // géométrie d'un rouleau (partagée par la texture et le maillage)
@@ -256,9 +257,15 @@ export class SlotMachine {
   tick(dt, playerPos) {
     this._t += dt;
     if (playerPos) this._dist = B.Vector3.Distance(playerPos, this.root.position);
-    // pulsation des néons
-    const p = 0.6 + 0.4 * Math.sin(this._t * 2.4 + this.index);
-    this.glowMat.emissiveColor = C3(...hslToRgb(this.hue / 360, 0.9, 0.35 + p * 0.3)).scale(0.8);
+    // perf : au-delà de 16 m la machine se fige — néon arrêté sur sa dernière
+    // teinte, rouleaux de démo plus relancés (ceux en vol s'accrochent et
+    // s'arrêtent d'eux-mêmes). Une machine JOUÉE a le joueur devant elle.
+    const far = this._dist !== undefined && this._dist > 16;
+    if (!far) {
+      // pulsation des néons
+      const p = 0.6 + 0.4 * Math.sin(this._t * 2.4 + this.index);
+      this.glowMat.emissiveColor = C3(...hslToRgb(this.hue / 360, 0.9, 0.35 + p * 0.3)).scale(0.8);
+    }
 
     for (const r of this.reels) {
       if (r.vel !== 0) {
@@ -282,7 +289,7 @@ export class SlotMachine {
             }
           }
         }
-      } else if (this.demo && Math.random() < dt * 0.12) {
+      } else if (this.demo && !far && Math.random() < dt * 0.12) {
         r.vel = rnd(9, 16);
         r.target = rndInt(0, SYMBOLS.length - 1);
       }
@@ -354,20 +361,36 @@ function hslToRgb(h, s, l) {
 
 export function buildSlots(scene, world, audio) {
   const machines = [];
+  // Le parc du handoff : `rows` épines dos-à-dos (pas de 6,8 m en z), `per`
+  // machines par face au pas de 0,95 m en x — 3 × 2 × 9 = 54 postes.
+  const { x0, z0, rows, per } = LAYOUT.slots;
+  const spineMat = pbr("spineM", scene, { color: C3(0.07, 0.05, 0.05), roughness: 0.4, metallic: 0.3 });
   let i = 0;
-  // deux îlots dos-à-dos, orientés vers les allées
-  for (const [zRow, dir] of [[-6.5, 1], [-6.5, -1], [5.5, 1], [5.5, -1]]) {
-    for (let k = 0; k < 5; k++) {
-      const x = -18.5 + k * 2.0;
-      const z = zRow + dir * 0.42;
-      const m = new SlotMachine(scene, world, audio,
-        V3(x, 0, z), dir > 0 ? 0 : Math.PI,
-        TITLES[i % TITLES.length], (i * 47) % 360, i);
-      machines.push(m); i++;
+  for (let r = 0; r < rows; r++) {
+    const zRow = z0 + r * 6.8;
+    for (const dir of [1, -1]) {
+      for (let k = 0; k < per; k++) {
+        const x = x0 + k * 0.95;
+        const z = zRow + dir * 0.42;
+        const m = new SlotMachine(scene, world, audio,
+          V3(x, 0, z), dir > 0 ? 0 : Math.PI,
+          TITLES[i % TITLES.length], (i * 47) % 360, i);
+        machines.push(m); i++;
+      }
     }
+    // PLUS D'ÉPINE ENTRE LES FACES. Le caisson procédural de 2,75 m dépassait
+    // des machines et se lisait comme un mur en bout de rangée, et l'épine
+    // art-déco glb (slot_spine.glb) sortait avec les mauvais axes — dressée
+    // en tour de 9 m au milieu des allées. Retour utilisateur du 18/08 :
+    // « enlever les blocs autour des machines ». Les machines sont dos à dos,
+    // leurs caissons se suffisent ; une simple lisse basse ferme l'interstice.
+    const cx = x0 + (per - 1) * 0.95 / 2;
+    const sill = B.MeshBuilder.CreateBox("spineSill", { width: (per - 1) * 0.95 + 0.9, height: 0.35, depth: 0.9 }, scene);
+    sill.position = V3(cx, 0.175, zRow);
+    sill.material = spineMat; sill.checkCollisions = true; sill.receiveShadows = true;
   }
-  // la machine libre, mise en avant, face à l'allée principale
-  const free = new SlotMachine(scene, world, audio, V3(-11.2, 0, 0.4), Math.PI / 2 + 0.15, "LE MIRAGE", 42, 99);
+  // la machine libre, mise en avant, face à l'allée principale (vers la fontaine)
+  const free = new SlotMachine(scene, world, audio, V3(-12.6, 0, -0.8), Math.PI / 2 - 0.15, "LE MIRAGE", 42, 99);
   free.demo = false;
   free.isFree = true;
   free.hit.metadata.label = "Jouer — machine libre";

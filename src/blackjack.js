@@ -99,7 +99,7 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
   const P = LAYOUT[idx ? "blackjack" + idx : "blackjack"];
   const root = new B.TransformNode("bjRoot" + (idx || ""), scene);
   root.position = P.clone();
-  root.rotation.y = -Math.PI / 2;   // le croupier a le dos au mur (+X monde)
+  root.rotation.y = -Math.PI / 2;   // le croupier a le dos à la scène (+X monde)
 
   const RX = 1.62, RZ = 1.15;   // demi-axes de l'ovale
   const SEAT_DA = 0.42;         // écart angulaire entre deux places
@@ -115,7 +115,11 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
       chair: onEllipse(a, 1.5, 0),
       cardSpot: onEllipse(a, CARD_K, TOP_Y + 0.006),
       betSpot: onEllipse(a, 0.60, TOP_Y + 0.01),
-      chipSpot: onEllipse(a, 0.86, TOP_Y + 0.01),
+      // la réserve du joueur, RAPPROCHÉE du cercle (0,86 -> 0,76) : à 0,86
+      // elle vivait sous le bord bas du cadre assis, on gagnait sans jamais
+      // voir ses jetons. 0,76 garde 18 cm d'écart avec le cercle — au-dessus
+      // du rayon de détection chipsNear (0,17), les tris restent justes.
+      chipSpot: onEllipse(a, 0.76, TOP_Y + 0.01),
     });
   }
 
@@ -258,20 +262,187 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     npcs.push({ npc: n, seat: s, hand: [], bet: 0, betChips: [], stack: [], done: false, cash: rndInt(600, 4000) });
   }
 
-  // jetons physiques du joueur (3 piles sur le rail)
   // suit la place choisie : cartes, mises et piles de jetons s'y rattachent
   let playerSeat = SEATS[PLAYER_SEAT];
-  const playerStacks = [];
-  function refillPlayerStacks() {
+
+  /* ------------------------------------------------ LA BANQUE VISIBLE
+   * La pile devant le joueur vaut EXACTEMENT son portefeuille (me.cash) :
+   * une colonne par valeur de jeton, alignée sur le rail. Les mises prennent
+   * le VRAI jeton en haut de la bonne colonne, les gains atterrissent sur la
+   * colonne de leur valeur, et bankSync (appelé à chaque état serveur) répare
+   * tout écart — débits sans jetons (assurance, double), monnaie à rendre.
+   * `count` est le registre ENGAGÉ (vols compris, cf. betLedger) ; `meshes`
+   * ne liste que les jetons déjà matérialisés, dans l'ordre des étages.
+   * bankBreakdown() borne à 40 jetons : au-delà la pile plafonne, assumé. */
+  const bank = { meshes: new Map(), count: new Map(), built: false };
+  const bcol = (v) => { let l = bank.meshes.get(v); if (!l) bank.meshes.set(v, l = []); return l; };
+  const bcount = (v) => bank.count.get(v) || 0;
+  // LES MÊMES VALEURS QUE LE HUD (et que la décomposition serveur des mises) :
+  // pas de jeton de 1000 à la table, il n'existe qu'au guichet.
+  const BANK_VALS = [5, 25, 100, 500];
+  /**
+   * Décompose un montant FAÇON JOUEUR : beaucoup de petits jetons, le moins
+   * possible de gros — 2500 € donne 2×500 + 12×100 + 10×25 + 10×5, pas 5×500.
+   * Chaque étage prend son quota en laissant un reste divisible par l'étage
+   * supérieur (l'exactitude au jeton de 5 près est garantie) ; au-delà de
+   * 40 jetons au total, les petits refusionnent vers le haut.
+   */
+  function bankBreakdown(amount) {
+    amount = Math.floor(Math.max(0, amount) / 5) * 5;
+    const n = { 5: 0, 25: 0, 100: 0, 500: 0 };
+    // [valeur, groupe (= 1 jeton du dessus), quota de colonne]
+    for (const [v, g, q] of [[5, 5, 14], [25, 4, 11], [100, 5, 12]]) {
+      const min = (amount % (v * g)) / v;              // l'appoint obligatoire
+      const k = Math.max(0, Math.min(Math.floor((q - min) / g),
+        Math.floor((Math.floor(amount / v) - min) / g)));
+      n[v] = min + g * k;
+      amount -= n[v] * v;
+    }
+    n[500] = Math.floor(amount / 500);
+    const tot = () => n[5] + n[25] + n[100] + n[500];
+    while (tot() > 40) {
+      if (n[100] >= 5) { n[100] -= 5; n[500]++; }
+      else if (n[25] >= 4) { n[25] -= 4; n[100]++; }
+      else if (n[5] >= 5) { n[5] -= 5; n[25]++; }
+      else break;
+    }
+    // au-delà du représentable (~20 000 €), la colonne de 500 plafonne : la
+    // pile ne montre plus TOUT le portefeuille, bankSync vise la même borne
+    n[500] = Math.min(n[500], Math.max(0, 40 - n[5] - n[25] - n[100]));
+    const out = [];
+    for (const v of [...BANK_VALS].reverse()) for (let i = 0; i < n[v]; i++) out.push(v);
+    return out;
+  }
+
+  /**
+   * Décompose un GAIN dans la monnaie de la mise : misé en 25, payé en 25 ;
+   * misé en 100, payé en 100. `unit` = le plus gros jeton misé dans la manche.
+   * L'appoint (blackjack 3:2…) descend en jetons plus petits ; si le paiement
+   * demandait plus de 14 jetons, on s'autorise la valeur supérieure.
+   */
+  function payoutBreakdown(gain, unit) {
+    gain = Math.floor(Math.max(0, gain) / 5) * 5;
+    let hi = Math.max(0, BANK_VALS.indexOf(unit));
+    for (;;) {
+      const out = [];
+      let r = gain;
+      for (let k = hi; k >= 0; k--) {
+        const v = BANK_VALS[k];
+        while (r >= v && out.length < 40) { out.push(v); r -= v; }
+      }
+      if ((r > 0 || out.length > 14) && hi < BANK_VALS.length - 1) { hi++; continue; }
+      return out;
+    }
+  }
+
+  /** Pied de la colonne d'une valeur, sur le rail de la place du joueur. */
+  function bankColXZ(v) {
     const cs = toWorld(playerSeat.chipSpot);
-    const dirX = Math.cos(root.rotation.y + playerSeat.a), dirZ = -Math.sin(root.rotation.y + playerSeat.a);
-    const conf = [[100, 6], [25, 8], [5, 8]];
-    conf.forEach(([v, n], k) => {
-      const off = (k - 1) * 0.075;
-      const x = cs.x + dirX * off, z = cs.z + dirZ * off;
-      const st = chips.stack(v, n, x, z, TOP_Y);
-      playerStacks.push({ v, list: st });
+    const dirX = Math.cos(root.rotation.y + playerSeat.a);
+    const dirZ = -Math.sin(root.rotation.y + playerSeat.a);
+    const k = Math.max(0, BANK_VALS.indexOf(v));
+    const off = (k - 1.5) * 0.052;
+    return { x: cs.x + dirX * off, z: cs.z + dirZ * off };
+  }
+
+  /** Réserve l'étage suivant d'une colonne ; rend la position cible du jeton. */
+  function bankReserve(v) {
+    const n = bcount(v);
+    bank.count.set(v, n + 1);
+    const p = bankColXZ(v);
+    return V3(p.x + rnd(-0.0015, 0.0015), TOP_Y + CHIP_H / 2 + n * CHIP_H,
+      p.z + rnd(-0.0015, 0.0015));
+  }
+  /** Matérialise un jeton dans sa colonne (appeler quand le vol démarre). */
+  function bankRegister(c) { c.metadata.keep = true; bcol(c.metadata.value).push(c); }
+
+  /** Prend le jeton du HAUT d'une colonne pour miser ; null si indisponible. */
+  function bankTake(v) {
+    const l = bank.meshes.get(v);
+    // un jeton réservé mais pas encore matérialisé est en vol : on n'y touche pas
+    if (!l || !l.length || l.length < bcount(v)) return null;
+    const c = l.pop();
+    bank.count.set(v, bcount(v) - 1);
+    if (c.isDisposed()) return null;
+    c.metadata.keep = false;
+    return c;
+  }
+
+  /** Fait pleuvoir des jetons du râtelier du croupier sur leurs colonnes. */
+  function bankAdd(values, { start = 260, delay = 85 } = {}) {
+    const from = toWorld(V3(0, TOP_Y + 0.16, -0.74));
+    values.forEach((v, i) => {
+      const dst = bankReserve(v);
+      setTimeout(() => {
+        const c = chips.spawn(v, V3(from.x + rnd(-0.07, 0.07), from.y, from.z + rnd(-0.03, 0.03)));
+        bankRegister(c);
+        chips.toss(c, dst, { arc: 0.3 });
+      }, start + i * delay);
     });
+  }
+
+  /** Bâtit la banque d'un coup (à l'assise), sans animation. */
+  function bankBuild(cash) {
+    bank.built = true;
+    const byV = new Map();
+    for (const v of bankBreakdown(Math.max(0, Math.floor(cash)))) byV.set(v, (byV.get(v) || 0) + 1);
+    for (const [v, n] of byV) {
+      const p = bankColXZ(v);
+      bank.count.set(v, n);
+      for (const c of chips.stack(v, n, p.x, p.z, TOP_Y)) bankRegister(c);
+    }
+  }
+
+  /** Vide la banque (départ ou changement de place). */
+  function bankClear(animate) {
+    const all = [];
+    for (const l of bank.meshes.values())
+      for (const c of l) if (!c.isDisposed()) { c.metadata.keep = false; all.push(c); }
+    bank.meshes.clear(); bank.count.clear(); bank.built = false;
+    if (!all.length) return;
+    if (animate) chips.sweep(all, toWorld(playerSeat.chair).add(V3(0, 1.1, 0)));
+    else all.forEach((c) => {
+      const i = chips.pool.indexOf(c);
+      if (i >= 0) chips.pool.splice(i, 1);
+      c.metadata.agg?.dispose(); c.dispose();
+    });
+  }
+
+  /**
+   * Rapproche la banque du portefeuille. On ne corrige que l'ÉCART DE VALEUR
+   * (assurance, double, appoint impossible sur une mise, dépôt au guichet) —
+   * exiger la répartition idéale au jeton près ferait échanger des jetons à
+   * chaque manche. Seule exception : une colonne de petits qui déborde est
+   * refusionnée en jetons supérieurs (le croupier fait de la monnaie).
+   */
+  function bankSync(cash) {
+    if (!bank.built) return;
+    // la cible est ce que la pile PEUT montrer (bankBreakdown plafonne) —
+    // viser le cash brut au-delà de la borne ferait pleuvoir sans fin
+    cash = bankBreakdown(cash).reduce((s, v) => s + v, 0);
+    const excess = [], rain = [];
+    let need = -cash;
+    for (const v of BANK_VALS) need += v * bcount(v);   // > 0 : banque trop riche
+    // l'appoint exact d'abord, en partant des grosses colonnes…
+    for (const v of [...BANK_VALS].reverse()) {
+      while (need >= v) { const c = bankTake(v); if (!c) break; excess.push(c); need -= v; }
+    }
+    // …sinon on casse un jeton et la monnaie sera rendue en pluie
+    for (const v of BANK_VALS) {
+      while (need > 0) { const c = bankTake(v); if (!c) break; excess.push(c); need -= v; }
+      if (need <= 0) break;
+    }
+    if (need < 0) rain.push(...bankBreakdown(-need));
+    // colonnes qui débordent : un groupe part au râtelier, le gros jeton revient
+    for (const [v, g, cap] of [[5, 5, 18], [25, 4, 14], [100, 5, 15]]) {
+      while (bcount(v) >= cap + g
+        && (bank.meshes.get(v)?.length ?? 0) === bcount(v)) {
+        for (let j = 0; j < g; j++) { const c = bankTake(v); if (c) excess.push(c); }
+        rain.push(v * g);
+      }
+    }
+    if (excess.length) chips.sweep(excess, rackWorld());
+    if (rain.length) bankAdd(rain, { start: excess.length ? 500 : 180 });
   }
 
   // jetons décoratifs devant les PNJ
@@ -359,7 +530,11 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     // place, pas à celle calculée au moment du lancer.
     c._tgtLocal = targetLocal.add(V3(spread.x, 0.004 + spread.y + (opt.lift || 0), spread.z));
     c._lift = opt.lift || 0; c._tilt = opt.tilt || 0;
-    const rotY = root.rotation.y + rnd(-0.09, 0.09);
+    // Orientée pour être lue depuis SA place (`seatA` = angle du siège sur
+    // l'ovale) : avec la seule rotation de table, toutes les mains étaient
+    // cadrées pour la place centrale — en bord, ses propres cartes
+    // apparaissaient tournées de ~45°.
+    const rotY = root.rotation.y + (opt.seatA || 0) + rnd(-0.09, 0.09);
     c._rotY = rotY;
 
     // `opt.delay` échelonne le lancer : la carte est créée tout de suite mais
@@ -484,7 +659,10 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
 
   // chrono de phase : le serveur donne msLeft/msTotal, on interpole entre deux
   // photos pour que la jauge coule au lieu de sauter de trame en trame
-  const timer = { deadline: 0, total: 1, show: false, mine: false, lastSec: -1 };
+  const timer = { deadline: 0, total: 1, show: false, mine: false, lastSec: -1,
+    // sursis en cours : la jauge passe au blanc-or et cesse de rougir — ce
+    // n'est plus le temps qui manque, c'est la réserve qui brûle
+    bank: false };
 
   // Les totaux (réticules AR + HUD) sont retenus tant qu'une carte est en vol :
   // la photo serveur arrive AVANT que la carte atterrisse, et afficher "19"
@@ -511,10 +689,12 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
   // est cachée : le calcul mental du joueur, rendu visible.
   const badges = new Map();      // "2:0" | "2:1" | "dealer" -> pastille
 
+  const BDG_W = 320, BDG_H = 192;     // texture de la pastille
+
   function badge(key) {
     let b = badges.get(key);
     if (b) return b;
-    const dt = new B.DynamicTexture("bdg" + key, { width: 256, height: 160 }, scene, false);
+    const dt = new B.DynamicTexture("bdg" + key, { width: BDG_W, height: BDG_H }, scene, false);
     dt.hasAlpha = true;
     const mat = new B.StandardMaterial("bdgM" + key, scene);
     mat.emissiveTexture = dt;
@@ -527,63 +707,110 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     mat.alphaMode = B.Engine.ALPHA_COMBINE;
     mat.backFaceCulling = false;
     mat.disableDepthWrite = true;
-    const plane = B.MeshBuilder.CreatePlane("bdgP" + key, { width: 0.30, height: 0.1875 }, scene);
+    const plane = B.MeshBuilder.CreatePlane("bdgP" + key,
+      { width: 0.26, height: 0.26 * BDG_H / BDG_W }, scene);
     plane.material = mat;
-    // couché à plat, le plan présente son dos : sans ce miroir en X, le texte
-    // se lit inversé depuis la place (constaté en jeu)
-    plane.scaling.x = -1;
+    // DEBOUT ET FACE AU JOUEUR. Couchée sur le feutre, la pastille était vue
+    // sous ~20° : le chiffre y était écrasé à un quart de sa hauteur, et les
+    // cartes lui passaient dessus. Elle flotte maintenant au-dessus de sa main,
+    // en billboard vertical — donc jamais déformée, jamais recouverte.
+    plane.billboardMode = B.AbstractMesh.BILLBOARDMODE_Y;
+    plane.renderingGroupId = 1;        // toujours par-dessus le tapis et les cartes
     plane.isPickable = false;
-    b = { plane, dt, sig: "", pop: 0 };
+    b = { plane, dt, sig: "", pop: 0, size: 1 };
     badges.set(key, b);
     return b;
   }
 
   /**
-   * Réticule AR couché SUR le feutre : deux crochets d'arc, des graduations et
-   * la valeur, orientés pour se lire depuis la place (`topDir` = direction du
-   * HAUT des glyphes, vers le centre de la table pour un joueur).
+   * Pastille de valeur : plaque de verre fumé cerclée d'or, crochets de visée,
+   * le chiffre au centre. Elle FLOTTE au-dessus de sa main et fait toujours
+   * face au joueur (billboard) — le fond sombre lui donne le contraste que le
+   * feutre ne donnait pas, et l'altitude la met hors d'atteinte des cartes.
    */
-  function setBadge(key, pos, topDir, text, color = "#f2e7c8") {
+  function setBadge(key, pos, text, color = "#f2e7c8", size = 1) {
     const b = badge(key);
     b.plane.setEnabled(true);
     b.plane.position.copyFrom(pos);
-    b.plane.rotation.set(-Math.PI / 2, Math.atan2(-topDir.x, -topDir.z), 0);
+    b.size = size;
     const sig = text + "|" + color;
     if (b.sig === sig) return;
     b.sig = sig;
     const c = b.dt.getContext();
-    c.clearRect(0, 0, 256, 160);
-    const cx = 128, cy = 80, r = 58;
-    c.strokeStyle = color; c.fillStyle = color; c.shadowColor = color;
-    // crochets latéraux, façon viseur projeté. `shadowBlur` était à 14/20 : le
-    // halo débordait largement du glyphe et c'est lui qu'on voyait en premier.
-    // Réduit à un liseré qui détache le trait du feutre, sans napper.
-    c.lineWidth = 4; c.shadowBlur = 5;
-    for (const [a0, a1] of [[-0.42, 0.42], [Math.PI - 0.42, Math.PI + 0.42]]) {
-      c.beginPath(); c.arc(cx, cy, r, a0, a1); c.stroke();
-    }
-    // graduations
-    c.lineWidth = 3;
-    for (const a of [-0.6, 0.6, Math.PI - 0.6, Math.PI + 0.6]) {
+    const W = BDG_W, H = BDG_H, cx = W / 2, cy = H / 2;
+    c.clearRect(0, 0, W, H);
+    // plaque : le chiffre se lit SUR un fond à lui, plus sur le tapis
+    const pw = 200, ph = 118, px = cx - pw / 2, py = cy - ph / 2, r = 18;
+    c.beginPath();
+    c.moveTo(px + r, py);
+    c.arcTo(px + pw, py, px + pw, py + ph, r);
+    c.arcTo(px + pw, py + ph, px, py + ph, r);
+    c.arcTo(px, py + ph, px, py, r);
+    c.arcTo(px, py, px + pw, py, r);
+    c.closePath();
+    const g = c.createLinearGradient(0, py, 0, py + ph);
+    g.addColorStop(0, "rgba(18,12,5,.88)");
+    g.addColorStop(1, "rgba(6,4,2,.94)");
+    c.fillStyle = g; c.fill();
+    c.strokeStyle = color; c.lineWidth = 3;
+    c.shadowColor = color; c.shadowBlur = 12;
+    c.stroke();
+    // crochets de visée, de part et d'autre — l'idiome « réticule » survit
+    c.lineWidth = 4; c.shadowBlur = 6;
+    for (const dir of [-1, 1]) {
+      const x = cx + dir * (pw / 2 + 16);
       c.beginPath();
-      c.moveTo(cx + Math.cos(a) * (r - 5), cy + Math.sin(a) * (r - 5));
-      c.lineTo(cx + Math.cos(a) * (r + 7), cy + Math.sin(a) * (r + 7));
+      c.moveTo(x, cy - 22); c.lineTo(x + dir * 9, cy); c.lineTo(x, cy + 22);
       c.stroke();
     }
+    // le chiffre, plein cadre : c'est LUI qu'on vient lire
     c.textAlign = "center"; c.textBaseline = "middle";
-    c.shadowBlur = 7;
-    c.font = "700 " + (text.length > 3 ? 52 : text.length > 2 ? 62 : 76)
+    c.fillStyle = color;
+    c.shadowColor = "rgba(0,0,0,.9)"; c.shadowBlur = 8;
+    c.font = "700 " + (text.length > 3 ? 62 : text.length > 2 ? 74 : 88)
       + "px 'Futura','Avenir Next',sans-serif";
-    c.fillText(text, cx, cy + 3);
+    c.fillText(text, cx, cy + 4);
     b.dt.update();
     b.pop = 1;                       // le réticule « pope » quand la valeur change
   }
 
-  /** Point de projection au feutre : entre les cartes et le centre de la table. */
+  /* ALTITUDE, RECUL ET ÉCART DES PASTILLES.
+   *
+   * La pastille vole 9 cm au-dessus du feutre et se pose 22 % plus près du
+   * centre que les cartes : à l'écran elle sort par le HAUT de l'éventail, sans
+   * jamais l'effleurer — ni toucher la ligne du croupier, plus haut encore.
+   *
+   * AU SPLIT, tout se complique : les deux mains sont décalées en PROFONDEUR
+   * (0,52 et 0,38), donc l'une derrière l'autre vue de la place — deux
+   * pastilles au même régime se superposeraient. On les sépare sur les TROIS
+   * axes à la fois : un peu en angle (0,14 rad, assez pour trancher, pas assez
+   * pour empiéter sur le quartier du voisin, qui commence à 0,42 rad), et
+   * surtout en altitude — la main du fond monte plus haut. Réduites à 72 %,
+   * elles se lisent alors comme deux étiquettes distinctes.
+   */
+  // Réglables à chaud pendant une partie (le placement est recalculé à chaque
+  // photo serveur) : __game.bj.tuneBadges({ lift: .11, back: .74 }).
+  const BDG = {
+    lift: 0.09,        // vol au-dessus du feutre, main unique
+    back: 0.78,        // recul vers le centre (fraction du rayon carte)
+    side: 0.14,        // écart angulaire des mains séparées (rad)
+    split: [0.07, 0.16],   // altitude de la main proche / de la main du fond
+    small: 0.72,       // taille des pastilles quand la place en porte deux
+  };
+
+  /** Point de vol de la pastille : au-dessus de SA main, jamais sur une autre. */
   function arSpot(seatIdx, h) {
-    const p = spotFor(seatIdx, h);
-    return toWorld(V3(p.x * 0.72, TOP_Y + 0.004, p.z * 0.72));
+    const s = SEATS[seatIdx];
+    if (!s) return toWorld(V3(0, TOP_Y + BDG.lift, 0));
+    if (!isSplit(seatIdx)) {
+      return toWorld(onEllipse(s.a, CARD_K * BDG.back, TOP_Y + BDG.lift));
+    }
+    return toWorld(onEllipse(s.a + (h ? BDG.side : -BDG.side),
+      handK(h, true) * 0.84, TOP_Y + BDG.split[h ? 1 : 0]));
   }
+
+  /** Deux pastilles pour une place : plus petites, pour ne pas se marcher dessus. */
+  const badgeSize = (seatIdx) => (isSplit(seatIdx) ? BDG.small : 1);
 
   const hideBadge = (key) => { const b = badges.get(key); if (b) b.plane.setEnabled(false); };
   const hideAllBadges = () => { for (const k of badges.keys()) hideBadge(k); };
@@ -697,58 +924,10 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
 
   /* ---------------- HUD AR ---------------- */
 
-  // Le HUD de jeu n'est plus un panneau plaqué sur l'écran : le MESSAGE et le
-  // CHRONO flottent en hologramme au-dessus du feutre (billboard vertical,
-  // lumière additive), la MISE est gravée près du cercle. Le DOM ne garde que
-  // les boutons — ce qui se lit vit dans la scène.
-  let hud = null, hudMsg = "", hudDirty = true, hudLastDraw = 0, hudFrac = -2;
-
-  function ensureHud() {
-    if (hud) return hud;
-    const dt = new B.DynamicTexture("arHud" + idx, { width: 1024, height: 220 }, scene, false);
-    dt.hasAlpha = true;
-    const mat = new B.StandardMaterial("arHudM" + idx, scene);
-    mat.emissiveTexture = dt; mat.opacityTexture = dt;
-    mat.disableLighting = true;
-    // alpha classique comme les pastilles de valeur : du texte doit se LIRE,
-    // pas s'ajouter au feutre jusqu'à saturer
-    mat.alphaMode = B.Engine.ALPHA_COMBINE;
-    mat.disableDepthWrite = true;
-    mat.backFaceCulling = false;
-    // 1,9 × 0,41 : le panneau a quitté le centre du feutre pour le râtelier du
-    // croupier, deux fois plus loin de l'œil (2,15 m contre 1,08 m). À sa taille
-    // d'avant il n'occupait plus que 13 % de la hauteur d'image ; agrandi dans
-    // le rapport de la texture (1024/220), il en reprend 19 % et se lit.
-    const p = B.MeshBuilder.CreatePlane("arHudP" + idx, { width: 1.9, height: 0.41 }, scene);
-    p.material = mat;
-    p.billboardMode = B.AbstractMesh.BILLBOARDMODE_Y;   // face au joueur, droit
-    p.renderingGroupId = 1;
-    p.isPickable = false;
-    hud = { dt, p };
-    return hud;
-  }
-
-  function drawHud(frac, urgent) {
-    const c = hud.dt.getContext();
-    c.clearRect(0, 0, 1024, 220);
-    if (hudMsg) {
-      c.textAlign = "center"; c.textBaseline = "middle";
-      c.fillStyle = "#ffe9b0";
-      c.shadowColor = "#ffb84a"; c.shadowBlur = 8;
-      c.font = "700 62px 'Futura','Avenir Next',sans-serif";
-      c.fillText(hudMsg, 512, 92);
-    }
-    if (frac >= 0) {
-      const w = 560, x0 = (1024 - w) / 2, y = 178;
-      c.shadowBlur = 12;
-      c.fillStyle = "rgba(255,233,176,.18)";
-      c.fillRect(x0, y, w, 7);
-      c.fillStyle = urgent ? "#ff4a26" : "#ffd76a";
-      c.shadowColor = c.fillStyle;
-      c.fillRect(x0, y, w * frac, 7);
-    }
-    hud.dt.update();
-  }
+  // Le MESSAGE et le CHRONO ne sont plus un hologramme au-dessus du feutre :
+  // ils vivent dans un bandeau FIXE en haut de l'écran (#bjtop, voir
+  // index.html) — l'hologramme dérivait avec la caméra et forçait à chercher
+  // le texte dans la scène. La MISE reste gravée près du cercle.
 
   /**
    * LA CAGNOTTE DE SÉRIE, gravée au feutre devant mes jetons.
@@ -900,6 +1079,24 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     });
   }
   const rackWorld = () => toWorld(V3(0, TOP_Y + 0.05, -0.86));
+  // Étage de la PROCHAINE mise par place, tenu au moment où le jeton est
+  // PROGRAMMÉ (le vol dure ~300 ms : compter les jetons posés ne suffit pas).
+  const betLedger = new Map();
+  // Le plus gros jeton que J'AI misé cette manche : le croupier paie le gain
+  // dans cette monnaie (misé en 25 -> payé en 25). Remis à zéro au clear.
+  let myBetUnit = 0;
+  // Même registre pour la PILE DU JOUEUR (chipSpot) : gains et mises rendues
+  // arrivent en vol pendant ~1 s, compter les jetons posés ne suffit pas.
+  const pileLedger = new Map();
+  /** Réserve `count` étages sur la pile d'une place ; rend le premier. */
+  function reservePile(seatIdx, count) {
+    const st = SEATS[seatIdx];
+    const n = pileLedger.has(seatIdx)
+      ? pileLedger.get(seatIdx)
+      : chipsNear(toWorld(st.chipSpot), 0.17).length;
+    pileLedger.set(seatIdx, n + count);
+    return n;
+  }
 
   /** Volume des sons DE CETTE TABLE selon la distance de la caméra. */
   const tableVol = () => {
@@ -914,6 +1111,12 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
   function payoutChips(seatIdx, gain) {
     const st = SEATS[seatIdx];
     if (!st || !(gain > 0)) return;
+    // Chez MOI : le gain arrive du râtelier SUR LES BONNES COLONNES de la
+    // banque, valeur par valeur — la pile qu'on voit vaut ce qu'on possède.
+    if (G.seated && seatIdx === PLAYER_SEAT && bank.built) {
+      bankAdd(payoutBreakdown(gain, myBetUnit || 100));
+      return;
+    }
     const out = [];
     let left = gain;
     // on borne à 9 jetons : au-delà c'est de la physique jetée par la fenêtre
@@ -923,10 +1126,14 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     if (!out.length) out.push(5);
     const from = toWorld(V3(0, TOP_Y + 0.16, -0.74));      // râtelier du croupier
     const to = toWorld(st.chipSpot);
+    // ÉTAGES RÉSERVÉS D'AVANCE (cf. betLedger) : l'ancienne cible
+    // `rnd(0, 3) * CHIP_H` ± 5 cm éparpillait les gains n'importe comment sur
+    // la pile. Chaque jeton vise SON étage — la pile grandit jeton par jeton.
+    const base = reservePile(seatIdx, out.length);
     out.forEach((v, i) => setTimeout(() => {
       const c = chips.spawn(v, V3(from.x + rnd(-0.07, 0.07), from.y, from.z + rnd(-0.03, 0.03)));
-      chips.toss(c, V3(to.x + rnd(-0.05, 0.05),
-        TOP_Y + CHIP_H / 2 + rnd(0, 3) * CHIP_H, to.z + rnd(-0.05, 0.05)), { arc: 0.3 });
+      chips.toss(c, V3(to.x + rnd(-0.002, 0.002),
+        TOP_Y + CHIP_H / 2 + (base + i) * CHIP_H, to.z + rnd(-0.002, 0.002)), { arc: 0.3 });
     }, 260 + i * 85));
   }
 
@@ -994,7 +1201,13 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     // repoussent en explosant — échelonnés, c'est un geste de croupier.
     let tossed = 0;
     for (const ev of events || []) {
+      try {
       if (ev.t === "clear") {
+        betLedger.clear();
+        myBetUnit = 0;
+        // re-semé du vrai décompte à la prochaine arrivée : corrige la dérive
+        // si le GC du pool a mangé le bas d'une pile entre-temps
+        pileLedger.clear();
         clearTable();
         seatCards.clear(); dealerCount = 0; holeCard = null;
         hideAllBadges();
@@ -1039,7 +1252,8 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
           : handSpread(SEATS[ev.seat] || playerSeat, n, n + 1, h, isSplit(ev.seat));
         const wait = dealt++ * DEAL_STAGGER;     // une carte à la fois
         const c = dealCard(spotFor(ev.seat, h), ev.faceUp !== false, spread,
-          { ...opt, card: ev.card || undefined, delay: wait });
+          { ...opt, card: ev.card || undefined, delay: wait,
+            seatA: isDealer ? 0 : (SEATS[ev.seat] || playerSeat).a });
         c._seat = ev.seat;          // pour savoir quelle main faire brûler
         c._h = h;
         // « Une carte. » — seulement sur MES tirages, jamais sur la donne
@@ -1103,10 +1317,22 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
           const t = toWorld(st.betSpot);
           const src = toWorld(st.chipSpot);
           const wait = tossed++ * 80;
+          // HAUTEUR DE PILE EXACTE. L'ancienne cible `rnd(0, 4) * CHIP_H`
+          // donnait des étages fractionnaires : rest() FIGEAIT des jetons
+          // imbriqués l'un dans l'autre (bug « mes jetons se chevauchent »).
+          // Le registre attribue l'étage suivant dès la programmation du vol,
+          // semé du nombre de jetons déjà posés si la place est inconnue.
+          const n = betLedger.has(ev.seat) ? betLedger.get(ev.seat) : chipsNear(t, 0.17).length;
+          betLedger.set(ev.seat, n + 1);
+          // MA mise décolle du haut de la vraie colonne (pris MAINTENANT :
+          // le registre de la banque doit refléter le débit dès la programmation)
+          if (ev.seat === PLAYER_SEAT) myBetUnit = Math.max(myBetUnit, ev.value);
+          const fromBank = G.seated && ev.seat === PLAYER_SEAT ? bankTake(ev.value) : null;
           setTimeout(() => {
-            const chip = chips.spawn(ev.value, V3(src.x, TOP_Y + 0.12, src.z));
-            chips.toss(chip, V3(t.x + rnd(-0.01, 0.01),
-              TOP_Y + CHIP_H / 2 + rnd(0, 4) * CHIP_H, t.z + rnd(-0.01, 0.01)), { arc: 0.2 });
+            const chip = fromBank && !fromBank.isDisposed() ? fromBank
+              : chips.spawn(ev.value, V3(src.x, TOP_Y + 0.12, src.z));
+            chips.toss(chip, V3(t.x + rnd(-0.008, 0.008),
+              TOP_Y + CHIP_H / 2 + n * CHIP_H, t.z + rnd(-0.008, 0.008)), { arc: 0.2 });
           }, wait);
         }
       } else if (ev.t === "rebet") {
@@ -1130,6 +1356,28 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
           heat?.extinguish(ev.tier || 0);
           arPot(0);
         }
+      } else if (ev.t === "timebank") {
+        // LE SURSIS S'ENGAGE — tout seul, sans un clic. C'est le principe :
+        // celui qui n'est pas là ne peut rien cliquer. On le DIT fort, parce
+        // qu'une barre vient de partir et qu'elle ne reviendra pas.
+        if (G.seated && ev.seat === PLAYER_SEAT) {
+          ui.toast(ev.left > 0
+            ? "TEMPS ADDITIONNEL — une barre consommée, il en reste " + ev.left
+            : "TEMPS ADDITIONNEL — dernière barre consommée, la réserve est vide",
+            ev.left > 0 ? "" : "lose");
+          audio.chipRiffle?.();
+          voice?.say("vite", { delay: 400 });
+        } else {
+          // chez le voisin, une ligne discrète : la table sait pourquoi elle
+          // attend, au lieu de croire à un serveur figé
+          const st = SEATS[ev.seat];
+          if (st) floatText("+ TEMPS", toWorld(st.chipSpot).add(V3(0, 0.22, 0)), "#ffe9b0");
+        }
+      } else if (ev.t === "buytime") {
+        if (G.seated && ev.seat === PLAYER_SEAT) {
+          ui.toast("Barre de temps rachetée — " + fmt(ev.price) + " € (réserve : " + ev.left + ")");
+          audio.chipRiffle?.();
+        }
       } else if (ev.t === "result") {
         const lost = ev.result === "lose" || ev.result === "bust";
         const won = ev.result === "win" || ev.result === "bj";
@@ -1142,12 +1390,27 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
         // gagnées ou rendues -> elles reviennent devant le joueur. Sans ça les
         // jetons s'empilaient sur les cercles de mise, manche après manche.
         if (h === 0) {
+          betLedger.delete(ev.seat);
           const stc = SEATS[ev.seat];
           if (stc) {
             const betW = toWorld(stc.betSpot);
             const onCircle = chipsNear(betW, 0.17);
             if (lost) chips.sweep(onCircle, rackWorld());
-            else chips.slideStack(onCircle, toWorld(stc.chipSpot).add(V3(0, 0.02, 0)), 80);
+            else if (G.seated && ev.seat === PLAYER_SEAT && bank.built) {
+              // chaque jeton regagne LA COLONNE DE SA VALEUR dans la banque
+              onCircle.forEach((c, i) => {
+                const dst = bankReserve(c.metadata.value);
+                setTimeout(() => {
+                  if (c.isDisposed()) return;
+                  bankRegister(c);
+                  chips.toss(c, dst, { arc: 0.18 });
+                }, i * 80);
+              });
+            } else if (onCircle.length) {
+              const cs = toWorld(stc.chipSpot);
+              chips.slideStack(onCircle, V3(cs.x, TOP_Y, cs.z), 80,
+                reservePile(ev.seat, onCircle.length));
+            }
           }
         }
         if (won) {
@@ -1168,7 +1431,16 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
           sparkBurst(ev.seat, ev.seat === PLAYER_SEAT && G.seated
             ? (ev.result === "bj" ? 1.6 : 1) + (ev.bonus > 0 ? 0.4 : 0)
             : 0.35);
-          if (ev.result === "bj") confettiBurst(ev.seat);
+          if (ev.result === "bj") {
+            confettiBurst(ev.seat);
+            // L'ANNONCE D'ARÈNE « BLACKJACK ! » se crie pour TOUTE place de la
+            // table, pas seulement la mienne — comme les confettis, c'est
+            // l'événement de la table. Toujours, jamais autre chose : la seule
+            // réplique de l'intention est ann_blackjack (voir dealer.js), et
+            // `force` + priorité 3 la font passer devant tout. Deux blackjacks
+            // dans la même donne = un seul cri (délai propre de l'intention).
+            if (G.seated) voice?.say("blackjack", { delay: 420, force: true });
+          }
         }
 
         if (G.seated && ev.seat === PLAYER_SEAT) {
@@ -1178,7 +1450,9 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
             heat?.gold(true); shockwave(ev.seat, 1);
             cinema?.winPunch(1.25);
             heat?.flashLamp(1.4);
-            voice?.say("blackjack", { delay: 420, force: true });
+            // l'annonce « BLACKJACK ! » est criée plus haut, pour toutes les
+            // places — ici seulement la pique, réservée à MON blackjack
+            voice?.tease?.("bigWin", { delay: 2800 });
           } else if (ev.result === "win") {
             ui.msg(gainMsg("GAGNÉ", ev) + tag); audio.win(false);
             heat?.gold(false); shockwave(ev.seat, 0.6);
@@ -1199,6 +1473,16 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
           // égales est neutre. Piloté par l'événement de la main 0 seulement :
           // c'est lui qui porte la vérité de la série, l'autre n'est qu'écho.
           if (h === 0) {
+            // LE CROUPIER CHARRIE — sur les séries, comme un vrai croupier qui
+            // glisse un mot. Deux mains brûlées d'affilée, ou trois pertes de
+            // suite : la pique part dans le salon (et en voix quand il y en a
+            // une). L'égalité ne casse ni ne nourrit la série.
+            if (ev.net < 0) {
+              G.loseRun = (G.loseRun || 0) + 1;
+              G.bustRun = ev.result === "bust" ? (G.bustRun || 0) + 1 : 0;
+              if (G.bustRun >= 2) voice?.tease?.("bust", { delay: 1700 });
+              else if (G.loseRun >= 3) voice?.tease?.("loseStreak", { delay: 1700 });
+            } else if (ev.net > 0) { G.loseRun = 0; G.bustRun = 0; }
             // LA CAGNOTTE PERDUE : ce qui s'est accumulé main après main part
             // avec la série. C'est le prix du pari, il doit se voir passer —
             // en rouge, à l'endroit même où le chiffre grossissait.
@@ -1264,6 +1548,7 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
           else ui.toast("Pas de blackjack — assurance perdue", "lose");
         }
       } else if (ev.t === "clearbet") {
+        betLedger.delete(ev.seat);
         const st = SEATS[ev.seat];
         if (st) {
           const back = toWorld(st.chipSpot);
@@ -1272,10 +1557,29 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
             const d = c.getAbsolutePosition().subtract(spot);
             return Math.hypot(d.x, d.z) < 0.18 && Math.abs(d.y) < 0.25;
           });
-          chips.slideStack(near, V3(back.x, TOP_Y + 0.03, back.z), 40);
+          if (G.seated && ev.seat === PLAYER_SEAT && bank.built) {
+            near.forEach((c, i) => {
+              const dst = bankReserve(c.metadata.value);
+              setTimeout(() => {
+                if (c.isDisposed()) return;
+                bankRegister(c);
+                chips.toss(c, dst, { arc: 0.18 });
+              }, i * 40);
+            });
+          } else {
+            chips.slideStack(near, V3(back.x, TOP_Y, back.z), 40,
+              reservePile(ev.seat, near.length));
+          }
         }
       } else if (ev.t === "shuffle") {
         audio.shuffle(tableVol());
+      }
+      } catch (e) {
+        // un évènement qui casse ne doit JAMAIS geler la table : on le jette
+        // et l'état qui suit resynchronise tout (phase, chaleur, totaux). Le
+        // gel du 18/08 (« Le croupier joue » figé, mises muettes, flammes
+        // immortelles) venait d'une exception non attrapée exactement ici.
+        console.error("[bj] évènement", ev && ev.t, "en échec :", e);
       }
     }
     if (state) {
@@ -1289,30 +1593,32 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
       // valeurs des mains (réticules AR + totaux HUD), différées tant qu'une
       // carte vole encore — la valeur n'existe qu'une fois la carte posée
       const applyValues = () => {
-        const centerW = toWorld(V3(0, 0, 0));
+        // Les pastilles n'existent que pour QUI EST ASSIS À CETTE TABLE. Vues
+        // de loin, les totaux des autres tables flottaient dans la salle et se
+        // mélangeaient à ceux de la mienne.
+        if (!G.seated) { hideAllBadges(); return; }
         for (const st of state.seats) {
-          const chairW = toWorld(SEATS[st.i].chair);
-          const topDir = centerW.subtract(chairW); topDir.y = 0;
           if (st.hand && st.hand.length) {
-            setBadge(st.i + ":0", arSpot(st.i, 0), topDir, String(st.total), badgeColor(st.total));
+            setBadge(st.i + ":0", arSpot(st.i, 0), String(st.total),
+              badgeColor(st.total), badgeSize(st.i));
           } else hideBadge(st.i + ":0");
           if (st.split && st.split.hand.length) {
-            setBadge(st.i + ":1", arSpot(st.i, 1), topDir, String(st.split.total), badgeColor(st.split.total));
+            setBadge(st.i + ":1", arSpot(st.i, 1), String(st.split.total),
+              badgeColor(st.split.total), badgeSize(st.i));
           } else hideBadge(st.i + ":1");
         }
         const dh = state.dealer.hand || [];
         if (dh.length) {
-          // le croupier se lit depuis les places : le haut des glyphes vers -Z local
-          const dTop = toWorld(V3(0, 0, -1)).subtract(centerW); dTop.y = 0;
-          const dpos = toWorld(V3(0, TOP_Y + 0.004, -0.52));
+          // la pastille du croupier flotte derrière SA ligne de cartes
+          const dpos = toWorld(V3(0, TOP_Y + BDG.lift + 0.02, -0.42));
           if (state.dealer.total != null) {
             // le total du croupier se LIT sur le badge ; il n'est plus annoncé
             // à voix haute (« dix-huit », « la banque saute »… à chaque manche)
-            setBadge("dealer", dpos, dTop, String(state.dealer.total), badgeColor(state.dealer.total));
+            setBadge("dealer", dpos, String(state.dealer.total), badgeColor(state.dealer.total));
           } else {
             // carte cachée : on affiche ce que le joueur peut compter, « 10+? »
             const vis = dh.filter((c) => c && c.rank);
-            setBadge("dealer", dpos, dTop, (vis.length ? handValue(vis).total : "") + "+?");
+            setBadge("dealer", dpos, (vis.length ? handValue(vis).total : "") + "+?");
           }
         } else hideBadge("dealer");
         if (G.seated) {
@@ -1320,6 +1626,30 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
           // avec un split : les deux totaux, main active devinable au « · »
           ui.setPlayerVal(!me || !me.total ? "—"
             : me.split ? me.total + " · " + (me.split.total || "—") : me.total);
+          // LES MÊMES MAINS, DOUBLÉES À PLAT dans le HUD classique : la table
+          // 3D se regarde, ce panneau se LIT. La carte cachée du croupier y
+          // reste un dos — le serveur ne l'envoie pas, on n'invente rien.
+          const tag = (c) => (c && c.rank ? { r: c.rank, s: c.suit } : null);
+          const vis = dh.filter((c) => c && c.rank);
+          const mine = state.phase === "player" && state.turn === PLAYER_SEAT;
+          ui.setHands?.({
+            dealer: {
+              cards: dh.map(tag),
+              total: state.dealer.total ?? 0,
+              label: state.dealer.total != null ? String(state.dealer.total)
+                : vis.length ? handValue(vis).total + "+?" : "—",
+            },
+            main: {
+              cards: (me && me.hand ? me.hand : []).map(tag),
+              total: me ? me.total : 0,
+              active: !!(mine && me && !me.done),
+            },
+            split: me && me.split && me.split.hand.length ? {
+              cards: me.split.hand.map(tag),
+              total: me.split.total,
+              active: !!(mine && me.done && !me.split.done),
+            } : null,
+          });
         }
       };
       clearTimeout(valTimer);
@@ -1347,16 +1677,33 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
         // (`#bjbet.off`) : proposé en phase de paiement, il serait mort au
         // clic. Le serveur, lui, accepte aussi le paiement (raccourci C).
         ui.setBank?.(me && me.pot > 0 && state.phase === "betting" ? me.pot : 0);
+        // LA RÉSERVE DE TEMPS : le nombre de barres restantes, et le sursis en
+        // cours. Affichée en permanence à table — elle ne se recharge pas
+        // toute seule, autant que le joueur voie fondre son filet.
+        ui.setTimeBank?.(me ? me.tbank || 0 : 0, !!(me && me.tbankOn));
+        // +TEMPS : entre deux manches, et seulement RÉSERVE VIDE — le plafond
+        // vaut 1, donc `< tbankMax` dit exactement « tu as consommé la tienne ».
+        // Le serveur revalide tout (voir buyTime).
+        const price = state.tbankPrice || 0;
+        ui.setBuyTime?.(me && price && (me.tbank || 0) < (state.tbankMax || 0)
+          && me.cash >= price && (state.phase === "betting" || state.phase === "payout")
+          ? price : 0);
       }
       // le portefeuille suit la caisse du serveur — le front ne débite plus rien
       if (me && Number.isFinite(me.cash) && me.cash !== state_.cash) {
         state_.cash = me.cash;
         ui.updateCash();
       }
+      // ...et la banque physique suit le portefeuille : les évènements du lot
+      // ont déjà engagé leurs jetons, bankSync ne répare que le reste
+      // (assurance, double, monnaie à rendre, jetons mangés par le GC).
+      if (G.seated && bank.built && me && Number.isFinite(me.cash)) bankSync(me.cash);
       timer.deadline = Date.now() + (state.msLeft || 0);
       timer.total = Math.max(1, state.msTotal || 1);
       timer.mine = (state.phase === "player" && state.turn === PLAYER_SEAT)
         || (state.phase === "insurance" && !!me && !me.insResponded);
+      timer.bank = !!(me && me.tbankOn && state.phase === "player"
+        && state.turn === PLAYER_SEAT);
       timer.show = G.seated
         && ["betting", "player", "insurance"].includes(state.phase);
       if (G.seated) {
@@ -1379,6 +1726,7 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
         ui.setSide?.(me && me.side ? me.side + " €" : "");
         if (state.phase === "betting") ui.msg("Faites vos jeux");
         else if (state.phase === "insurance") { if (me && me.insResponded) ui.msg("Le croupier vérifie…"); }
+        else if (mine && timer.bank) ui.msg("TEMPS ADDITIONNEL — à vous de jouer");
         else if (mine) ui.msg(me && me.done && me.split && !me.split.done ? "Jouez la 2e main" : "À vous de jouer");
         else if (state.phase === "player") ui.msg("Tour du joueur " + state.turn);
         else if (state.phase === "dealer") ui.msg("Le croupier joue");
@@ -1387,13 +1735,10 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
   }
 
   /* ---------------- API ---------------- */
-  let stacksBuilt = false;
   const api = {
     root, seatHits, SEATS, NPC_SEATS, toWorld, G, dealer, npcs, applyServer, idx,
     get PLAYER_SEAT() { return PLAYER_SEAT; },
 
-    /** HUD AR : miroir du message et de la mise, projeté dans la scène. */
-    arMsg(t) { if (t !== hudMsg) { hudMsg = t; hudDirty = true; } },
     arBet,
 
     /** Injectés par main.js : chaleur et cinéma ont besoin de la caméra, créée après. */
@@ -1403,16 +1748,19 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     setVoice(v) { voice = v; },
     seatPos: (i = PLAYER_SEAT) => toWorld(SEATS[i].chair),
     tableCenter: () => toWorld(V3(0, TOP_Y, 0)),
+    /** Réglage à chaud du vol des pastilles de valeur (voir BDG). */
+    tuneBadges: (o) => Object.assign(BDG, o),
     dealerPos: () => toWorld(V3(0, 1.35, -1.5)),
 
     /** @param {number} i place choisie ; les jetons sont bâtis à cet endroit. */
     sit(i = PLAYER_SEAT) {
       if (SEATS[i] && !NPC_SEATS.includes(i)) {
+        if (i !== PLAYER_SEAT) bankClear(false);   // la banque déménage avec moi
         PLAYER_SEAT = i;
         playerSeat = SEATS[i];
       }
       G.seated = true;
-      if (!stacksBuilt) { stacksBuilt = true; refillPlayerStacks(); }
+      if (!bank.built) bankBuild(state_.cash);
       audio.chipRiffle();
       // le croupier salue celui qui s'assoit — une fois, pas à chaque va-et-vient
       voice?.reset();
@@ -1423,14 +1771,19 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     },
     leave() {
       G.seated = false;
+      bankClear(true);          // on empoche ses jetons en quittant la table
       heatSynced = false;
-      hudMsg = ""; hudDirty = true;
       if (betAR) betAR.p.setEnabled(false);
       if (potAR) potAR.p.setEnabled(false);
       heat?.reset();          // on ne quitte pas la table avec l'écran en feu
       voice?.reset();
+      G.loseRun = G.bustRun = G.slowRun = 0;   // les séries meurent avec le départ
       ui.showBetPanel(false); ui.showActions(false);
       ui.setRebet?.(0); ui.setBank?.(0);
+      ui.setTimeBank?.(0, false); ui.setBuyTime?.(0);
+      timer.bank = false;
+      ui.setHands?.(null);
+      hideAllBadges();
     },
     tick(dt, playerPos) {
       // jauge de temps : coule chaque frame, rougit et bat quand c'est à moi
@@ -1441,7 +1794,11 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
           const left = Math.max(0, timer.deadline - Date.now());
           document.getElementById("bjtimerfill").style.width =
             (100 * Math.min(1, left / timer.total)).toFixed(1) + "%";
-          const urgent = timer.mine && left < 3600 && left > 0;
+          // le sursis ne rougit PAS : le rouge dit « tu vas perdre ta main »,
+          // or ici la main est déjà sauvée. Il bat en blanc-or, et le compte à
+          // rebours vocal se tait — le croupier a déjà charrié une fois.
+          const urgent = timer.mine && !timer.bank && left < 3600 && left > 0;
+          tEl.classList.toggle("bank", timer.bank);
           tEl.classList.toggle("urgent", urgent);
           if (urgent) {
             const sec = Math.ceil(left / 1000);
@@ -1449,41 +1806,22 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
               timer.lastSec = sec;
               audio.tick?.();
               // « Allez, on se décide » — une seule fois, au bord du gouffre
-              if (sec === 3) voice?.say("vite");
+              if (sec === 3) {
+                voice?.say("vite");
+                // deux fins de chrono frôlées : le croupier charrie le lambin
+                G.slowRun = (G.slowRun || 0) + 1;
+                if (G.slowRun >= 2) { G.slowRun = 0; voice?.tease?.("slow", { delay: 900 }); }
+              }
             }
           } else timer.lastSec = -1;
         }
-      }
-      // hologramme message + chrono, au-dessus du feutre de MA table
-      if (G.seated) {
-        const h = ensureHud();
-        h.p.setEnabled(true);
-        /**
-         * JUSTE AU-DESSUS DU RÂTELIER DU CROUPIER (z = -0,86 local), pas au
-         * centre du feutre. À 1,46 m au-dessus du plancher de la table et à
-         * l'aplomb du centre, le panneau tombait à 3 % au-dessus du bord haut
-         * de l'image : on ne le voyait pas. Posé au fond, son bas (y ≈ 1,02)
-         * effleure le sommet des piles du râtelier et le texte occupe le haut
-         * du cadre, là où l'œil va déjà chercher la main du croupier.
-         */
-        h.p.position.copyFrom(toWorld(V3(0, TOP_Y + 0.30, -0.86)));
-        const left = Math.max(0, timer.deadline - Date.now());
-        const frac = timer.show ? Math.min(1, left / timer.total) : -1;
-        const urgent = timer.mine && timer.show && left < 3600 && left > 0;
-        const now = performance.now();
-        if (hudDirty || (now - hudLastDraw > 90 && Math.abs(frac - hudFrac) > 0.008)) {
-          hudDirty = false; hudLastDraw = now; hudFrac = frac;
-          drawHud(frac, urgent);
-        }
-      } else if (hud) {
-        hud.p.setEnabled(false);
       }
       // pastilles : le « pop » à chaque changement de valeur, puis retour
       for (const b of badges.values()) {
         if (!b.plane.isEnabled()) continue;
         b.pop = Math.max(0, b.pop - dt * 4.5);
-        const sc = 1 + b.pop * b.pop * 0.45;
-        b.plane.scaling.set(-sc, sc, sc);   // X négatif : correction miroir
+        const sc = (b.size || 1) * (1 + b.pop * b.pop * 0.45);
+        b.plane.scaling.set(sc, sc, sc);   // billboard : plus de miroir à corriger
       }
       // la chaise occupée s'ouvre ; les autres se referment dès qu'on s'éloigne
       // (les chaises ne bloquent plus : voir la construction de chairCol)

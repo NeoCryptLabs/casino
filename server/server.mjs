@@ -224,7 +224,8 @@ function attachRealtime(server) {
   // chanteuse, à son propre instant.
   const concert = new Concert(
     (msg) => broadcast(wss, msg),
-    join(GAME_ROOT, "assets", "sfx", "concert_song.mp3"));
+    join(GAME_ROOT, "assets", "sfx", "concert_song.mp3"),
+    join(GAME_ROOT, "assets", "voice", "annonce_concert.mp3"));
 
   const TABLE_TICK = setInterval(() => {
     tables.forEach((t) => t.tick());
@@ -245,6 +246,18 @@ function attachRealtime(server) {
     const id = nextId++;
     ws._pid = id;
     const claim = store.claim(tokenOf(req));
+    // Le jeton vient d'être repris à une session encore ouverte (rechargement
+    // de page, le plus souvent) : l'ancienne continue de jouer, mais sur une
+    // COPIE. Sans ça les deux écriraient dans le même profil, et la session
+    // fantôme — celle dont l'onglet est déjà fermé — aurait le dernier mot.
+    if (claim.stolen) {
+      for (const other of players.values()) {
+        if (other.token !== claim.token) continue;
+        other.profile = { ...other.profile, p: other.profile.p ? [...other.profile.p] : null };
+        other.token = null;
+        console.log(`[profils] jeton repris à ${other.name} (session ${other.id} passée en volatile)`);
+      }
+    }
     const profile = claim.profile;
     // LA MAISON RÉ-AVANCE, à l'arrivée seulement : une caisse persistante peut
     // tomber à zéro, et un joueur ruiné pour toujours n'aurait plus de jeu du
@@ -381,6 +394,7 @@ function attachRealtime(server) {
         else if (m.do === "clearbet") table.clearBet(id);
         else if (m.do === "rebet") table.rebet(id);
         else if (m.do === "bank") table.bank(id);
+        else if (m.do === "buytime") table.buyTime(id);
         else if (dev && m.do === "devstreak") {
           // TRICHE DE DEV UNIQUEMENT : force la série de la place, pour tester
           // chaque palier de chaleur (flammes, ×, bonus, extinction) sans

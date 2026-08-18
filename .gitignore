@@ -17,3 +17,6 @@ _verify.html
 # pas du dépôt
 server/players.json
 server/players.json.tmp
+
+# caches Python des outils
+tools/__pycache__/

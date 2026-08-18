@@ -113,11 +113,17 @@ export class Player {
    *  après un Échap : on retente une fois, sans bruit. */
   lock() {
     clearTimeout(this._relock);
+    this._relock = null;
+    // ASSIS, ON NE VERROUILLE JAMAIS. À une table, à une machine ou au bar, la
+    // souris appartient au HUD : la confisquer rend tous ses boutons muets.
+    if (this.seated) return;
     try {
       const p = this.canvas.requestPointerLock();
       if (p && p.catch) {
         p.catch(() => {
           this._relock = setTimeout(() => {
+            this._relock = null;
+            if (this.seated) return;
             try { this.canvas.requestPointerLock()?.catch?.(() => { }); } catch { }
           }, 500);
         });
@@ -129,6 +135,16 @@ export class Player {
    *  doit surtout pas être pris pour l'Échap du joueur. */
   unlock() {
     this._wantedUnlock = true;
+    // ON ANNULE LE RATTRAPAGE EN ATTENTE. `lock()` arme une reprise à 500 ms
+    // quand le navigateur refuse le verrouillage (Chrome et Safari le
+    // refusent pendant un court délai après un Échap). Sans cette annulation,
+    // la reprise se déclenchait APRÈS coup et reprenait la souris à l'instant
+    // même où le jeu venait de la rendre : le joueur s'asseyait à une table,
+    // la souris repartait en capture sans que rien ne l'indique, et plus un
+    // seul bouton du HUD ne répondait — 21+3, Retirer, Répéter — alors que le
+    // clavier, lui, continuait de marcher.
+    clearTimeout(this._relock);
+    this._relock = null;
     document.exitPointerLock();
   }
 
@@ -143,6 +159,13 @@ export class Player {
 
   update(dt) {
     const cam = this.camera;
+    // FILET DE SÉCURITÉ : assis, la souris appartient au HUD. Si elle se
+    // retrouve capturée malgré tout — reprise de verrouillage échappée, clic
+    // sur le canvas, verrouillage rendu par le navigateur après coup — on la
+    // rend immédiatement. Sans ce garde-fou, la panne est MUETTE : aucun
+    // bouton ne répond, aucune erreur en console, et le clavier continue de
+    // marcher, ce qui égare complètement le diagnostic.
+    if (this.seated && document.pointerLockElement) this.unlock();
     if (this.seated) {
       // Regard libre autour de la table, MAJ ENFONCÉE seulement : la souris à
       // gauche de l'écran tourne la tête à gauche, etc. — amorti, borné par

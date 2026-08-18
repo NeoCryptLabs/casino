@@ -24,12 +24,39 @@ const B = BABYLON;
 export const STAGE_H = 0.45;      // hauteur du plateau (cf. modèle Blender)
 const R = 2.6;                    // rayon de la DEMI-LUNE qui déborde du mur
 const DEPTH = 2.6;                // profondeur des coulisses (dans le mur)
+/**
+ * Plan du MUR, en z local de la scène.
+ *
+ * Le glb porte trois panneaux de remplissage (`wallFill+1`, `wallFill-1`,
+ * `wallFillTop`) qui bouchent le pourtour de la baie. Ils sont taillés à
+ * l'épaisseur exacte du mur — 0,5 m, comme les boîtes de `world.js` — et
+ * centrés en z local +0,05 : c'est CE plan qui doit coïncider avec l'axe du
+ * mur, sinon les panneaux flottent dans la salle et la baie reste béante
+ * derrière les coulisses.
+ */
+const FILL_Z = 0.05;
 
 export async function buildStage(scene, world, audio) {
   const P = LAYOUT.stage;
   const root = new B.TransformNode("stage", scene);
   root.position = P.clone();
-  root.rotation.y = Math.atan2(P.x, P.z);   // coulisses vers le mur proche
+  // coulisses vers le mur le plus proche — arrondi au quart de tour pour que
+  // la niche s'encastre PARALLÈLE au mur (l'ancre n'est jamais pile sur l'axe)
+  const q = ((Math.round(Math.atan2(P.x, P.z) / (Math.PI / 2)) % 4) + 4) % 4;
+  root.rotation.y = q * (Math.PI / 2);
+
+  // SOUDURE AU MUR. Après le quart de tour, le +Z local regarde le mur : +Z
+  // monde pour q=0, +X pour q=1, -Z pour q=2, -X pour q=3. On recale l'ancre
+  // sur ce mur-là, et sur ce seul axe — le placement LATÉRAL reste celui du
+  // plan (et du gizmo). Sans ce recalage, l'ancre saisie à la main laisse la
+  // scène en avant du mur : 3,55 m d'écart mesurés, donc une baie ouverte sur
+  // le vide derrière les coulisses.
+  const hw = LAYOUT.hall.w / 2, hd = LAYOUT.hall.d / 2;
+  if (q === 0) P.z = hd - FILL_Z;
+  else if (q === 1) P.x = hw - FILL_Z;
+  else if (q === 2) P.z = -hd + FILL_Z;
+  else P.x = -hw + FILL_Z;
+  root.position = P.clone();
   root.computeWorldMatrix(true);
   const local = (v) => B.Vector3.TransformCoordinates(v, root.getWorldMatrix());
 

@@ -32,14 +32,14 @@
  *    par les mises annexes, emporté par un brelan assorti au 21+3.
  */
 
-import { START_CASH } from "./profiles.mjs";
+import { START_CASH, TIME_BANK_MAX } from "./profiles.mjs";
 
 const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
 const SEATS = 5;
 const NPC_SEAT = 0;
 
 /** Portefeuille de maison : celui du figurant, et celui d'une place libre. */
-const houseWallet = () => ({ cash: START_CASH });
+const houseWallet = () => ({ cash: START_CASH, tbank: 0 });
 
 // durées de phase, en millisecondes
 const T = { betting: 9000, deal: 900, turn: 12000, dealer: 650, payout: 5000, insurance: 7000 };
@@ -47,6 +47,41 @@ const T = { betting: 9000, deal: 900, turn: 12000, dealer: 650, payout: 5000, in
 // plusieurs mains par minute au lieu d'attendre des phases dimensionnées pour
 // laisser un joueur réfléchir
 const T_EMPTY = { betting: 3500, payout: 3000 };
+
+/**
+ * LA BANQUE DE TEMPS — le sursis qu'on ne rend pas.
+ *
+ * Douze secondes suffisent pour décider, sauf le jour où le téléphone sonne.
+ * Sans filet, la table tranchait à la place du joueur : sa main était figée
+ * sur RESTER, sa mise en jeu, et il revenait sur un coup qu'il n'avait pas
+ * joué. Le filet, c'est une RÉSERVE : quand le chrono de décision arrive à
+ * zéro, une barre est consommée d'office et le temps repart pour T_BANK.
+ *
+ * Trois règles font tout l'objet :
+ *  - elle ne se recharge JAMAIS toute seule — ni à la main suivante, ni en
+ *    changeant de table, ni en revenant demain (elle vit dans le profil) ;
+ *  - une barre par DÉCISION : le sursis ne se rejoue pas sur la même carte,
+ *    mais tirer relance le chrono normal, et une autre barre peut y passer ;
+ *  - elle se rachète au tapis, TIME_BANK_PRICE la barre, entre deux manches.
+ *
+ * Elle ne couvre QUE la décision (tirer / rester / doubler / séparer) : c'est
+ * le seul moment où l'horloge coûte une main. Ne pas miser à temps ne coûte
+ * rien, et l'assurance non répondue est déjà le choix prudent.
+ *
+ * Elle ne joue pas pour les places automatiques (figurant, place orpheline) :
+ * qui a fermé son onglet ne stationne pas la table, il finit à la stratégie de
+ * base. Le sursis est pour celui qui est encore là, pas pour celui qui est
+ * parti.
+ */
+const T_BANK = 20000;
+/**
+ * Le rachat coûte une bouchée de pain — dix euros, moins que la plus petite
+ * mise. Ce n'est PAS un prix : c'est un geste. Ce qui coûte au joueur, ce n'est
+ * pas l'argent, c'est de devoir y penser entre deux manches, et de ne pouvoir
+ * le faire qu'après coup. Un tarif dissuasif aurait fait du filet un privilège
+ * de gros tapis ; à dix euros il reste ouvert à qui vient de se faire peur.
+ */
+export const TIME_BANK_PRICE = 10;
 
 /**
  * Paliers de CHALEUR. Une série de mains gagnées d'affilée multiplie le gain.
@@ -60,20 +95,37 @@ export const HEAT = [
   { at: 1, mult: 1.2, name: "TIÈDE" },
   { at: 2, mult: 1.5, name: "CHAUD" },
   { at: 3, mult: 2, name: "BRÛLANT" },
-  { at: 5, mult: 3, name: "INFERNO" },
+  // 7 et non 5 : cinq mains d'affilée tombaient trop souvent pour le palier
+  // maximal — l'INFERNO doit rester l'événement de la soirée, pas de l'heure.
+  { at: 7, mult: 3, name: "INFERNO" },
 ];
 
 /**
  * LA CAGNOTTE DE SÉRIE — le pari sur soi-même.
  *
  * Le bonus de chaleur ne tombe plus dans la poche à la fin de la main : il est
- * mis DE CÔTÉ, au double de sa valeur d'avant, et n'en sort que de deux façons
- * — le joueur l'encaisse (et sa série retombe à zéro, le feu s'éteint), ou il
- * continue et une main perdue emporte tout. C'est le même argent qu'avant,
- * doublé et mis en jeu : la chaleur cesse d'être un décor qu'on subit pour
- * devenir une décision qu'on prend.
+ * mis DE CÔTÉ, et n'en sort que de deux façons — le joueur l'encaisse (et sa
+ * série retombe à zéro, le feu s'éteint), ou il continue et une main perdue
+ * emporte tout.
+ *
+ * Le multiplicateur annoncé est HONNÊTE, et c'est la règle qui fixe le
+ * montant : à ×3, une main gagnée vaut exactement trois fois son net — 1× payé
+ * cash, 2× dans la cagnotte, à risque. L'ancien POT_BOOST doublait la part
+ * cagnotte : la main « ×3 » valait ×5, l'annonce mentait et la maison payait
+ * le mensonge.
  */
-const POT_BOOST = 2;
+
+/**
+ * PLAFOND DE LA CAGNOTTE — la part de ce que la place a réellement laissé à la
+ * maison (cumul misé moins cumul rendu) qu'elle peut espérer récupérer.
+ *
+ * Sans ce plafond, la cagnotte suivait le bénéfice de la MAIN COURANTE : cent
+ * mains à 25 € puis une seule à 500 € gagnée en série la faisaient bondir à
+ * 200 €, sans le moindre rapport avec ce que le joueur avait dépensé. Elle
+ * devient un remboursement partiel de ses pertes, jamais une prime sur un
+ * coup d'éclat.
+ */
+const POT_SHARE = 0.5;
 
 /** Palier atteint par une série donnée (le dernier seuil franchi). */
 export function heatOf(streak) {
@@ -156,6 +208,7 @@ export class Table {
       // du joueur. Hors de ça, la place joue avec l'argent de la maison.
       wallet: houseWallet(),
       orphan: false,       // le joueur a lâché la table en pleine main
+      tbankOn: false,      // sursis en cours sur la décision courante
       streak: 0,           // mains gagnées d'affilée — pilote la chaleur
       pot: 0,              // cagnotte de série, à encaisser ou à perdre
       lastBet: 0,          // dernière mise engagée — sert au bouton RÉPÉTER
@@ -185,6 +238,19 @@ export class Table {
   }
 
   _hasHumans() { return this.seats.some((s) => s.playerId); }
+
+  /**
+   * Ouvre le chrono de DÉCISION de cette place — le seul endroit d'où il part.
+   *
+   * Il repasse `tbankOn` à faux : chaque nouvelle décision repart sur le temps
+   * normal, donc le sursis peut être redemandé (et une deuxième barre y
+   * passer). Sans ce point de passage unique, un joueur ayant tiré pendant son
+   * sursis serait resté marqué « en sursis » et n'en aurait plus jamais eu.
+   */
+  _turnTimer(s) {
+    s.tbankOn = false;
+    this._setPhase("player", this._auto(s) ? 1200 : T.turn);
+  }
 
   /**
    * Cette place joue-t-elle toute seule ? Le figurant, bien sûr — et la place
@@ -226,6 +292,10 @@ export class Table {
     return {
       round: this.round,
       phase: this.phase,
+      // la barre de temps s'achète : son prix et son plafond viennent d'ici,
+      // pour qu'un bouton client n'affiche jamais un tarif que la table refuse
+      tbankPrice: TIME_BANK_PRICE,
+      tbankMax: TIME_BANK_MAX,
       turn: this.turn,
       msLeft: Math.max(0, this.until - Date.now()),
       msTotal: this.msTotal,
@@ -256,6 +326,9 @@ export class Table {
         streak: s.streak, tier: heatOf(s.streak).tier, mult: heatOf(s.streak).mult,
         // la cagnotte et la mise à répéter : deux boutons du client en dépendent
         pot: s.pot, lastBet: s.lastBet, lastSide: s.lastSide,
+        // la réserve de temps, et le sursis en cours : la jauge du client change
+        // de couleur sur le second, le nombre de barres se lit sur le premier
+        tbank: Math.max(0, Math.floor(s.wallet?.tbank || 0)), tbankOn: !!s.tbankOn,
       })),
     };
   }
@@ -331,7 +404,7 @@ export class Table {
     // partant : quitter la table (ou perdre sa liaison) l'encaisse d'office,
     // comme les mises non engagées juste au-dessus.
     if (s.pot > 0) { s.wallet.cash += s.pot; s.pot = 0; }
-    s.playerId = null; s.name = null; s.orphan = false;
+    s.playerId = null; s.name = null; s.orphan = false; s.tbankOn = false;
     s.bet = 0; s.side = 0; s.insurance = 0; s.insResponded = false;
     s.hand = []; s.split = null; s.done = false; s.result = null;
     s.streak = 0; s.lastBet = 0; s.lastSide = 0;
@@ -420,8 +493,42 @@ export class Table {
     const gain = s.pot;
     const tier = heatOf(s.streak).tier;
     s.pot = 0; s.streak = 0;
+    // la cagnotte encaissée est de l'argent RENDU : elle rembourse d'autant le
+    // déficit du JOUEUR, sans quoi la suivante se reconstituerait aussitôt au
+    // plafond
+    s.wallet.back = (s.wallet.back || 0) + gain;
     s.wallet.cash += gain;
     this._push({ t: "bank", seat: s.i, gain, tier });
+    this._flush();
+  }
+
+  /**
+   * RACHETER UNE BARRE DE TEMPS.
+   *
+   * Deux verrous, et ils font toute la mécanique :
+   *
+   *  - ENTRE DEUX MANCHES seulement, jamais pendant sa propre décision. Payer
+   *    pour prolonger le coup en cours reviendrait à acheter du temps à la
+   *    table ENTIÈRE : les autres attendraient le portefeuille du plus lent.
+   *  - RÉSERVE VIDE seulement (`held >= TIME_BANK_MAX`, et le plafond vaut 1).
+   *    On ne fait pas provision de sursis : le filet se retend APRÈS qu'on l'a
+   *    consommé. Sans ce verrou, dix euros posés d'avance à chaque manche
+   *    rendaient le chrono décoratif.
+   *
+   * L'argent part à la maison et ne rejoint pas `staked` : ce n'est pas une
+   * mise, ça ne se gagne pas, et ça ne doit donc pas gonfler le plafond de la
+   * cagnotte de série (voir POT_SHARE).
+   */
+  buyTime(playerId) {
+    if (this.phase !== "betting" && this.phase !== "payout") return;
+    const s = this.seatOf(playerId);
+    if (!s || !s.playerId) return;
+    const w = s.wallet;
+    const held = Math.max(0, Math.floor(w.tbank || 0));
+    if (held >= TIME_BANK_MAX || w.cash < TIME_BANK_PRICE) return;
+    w.cash -= TIME_BANK_PRICE;
+    w.tbank = held + 1;
+    this._push({ t: "buytime", seat: s.i, price: TIME_BANK_PRICE, left: w.tbank });
     this._flush();
   }
 
@@ -448,6 +555,24 @@ export class Table {
   _markDone(s, h, result = undefined) {
     if (h === 0) { s.done = true; if (result !== undefined) s.result = result; }
     else { s.split.done = true; if (result !== undefined) s.split.result = result; }
+  }
+
+  /**
+   * Le chrono de décision vient d'expirer : la réserve prend le relais si elle
+   * en a encore. Vrai = la main est sauvée, l'appelant ne tranche pas.
+   */
+  _grantTime(s) {
+    if (this._auto(s) || !s.playerId) return false;
+    if (s.tbankOn) return false;                 // le sursis ne se rejoue pas
+    const w = s.wallet;
+    const held = Math.max(0, Math.floor(w?.tbank || 0));
+    if (!held) return false;
+    w.tbank = held - 1;
+    s.tbankOn = true;
+    this._setPhase("player", T_BANK);
+    this._push({ t: "timebank", seat: s.i, ms: T_BANK, left: w.tbank });
+    this._flush();
+    return true;
   }
 
   action(playerId, what) {
@@ -489,7 +614,7 @@ export class Table {
     } else {
       // chaque décision d'un humain relance son temps : on réfléchit à la
       // NOUVELLE main, pas sur le reliquat du chrono précédent
-      if (!this._auto(s)) this._setPhase("player", T.turn);
+      if (!this._auto(s)) this._turnTimer(s);
       this._flush();
     }
   }
@@ -521,7 +646,7 @@ export class Table {
     }
     // 21 après split n'est PAS un blackjack — simple 21, la main est finie
     if (handValue(s.hand).total === 21) { s.done = true; this._advance(s); return; }
-    this._setPhase("player", T.turn);
+    this._turnTimer(s);
     this._flush();
   }
 
@@ -537,7 +662,7 @@ export class Table {
         this._push({ t: "card", seat: s.i, h: 1, card: c, faceUp: true });
         if (handValue(s.split.hand).total === 21) { s.split.done = true; this._next(); return; }
       }
-      if (!this._auto(s)) this._setPhase("player", T.turn);
+      if (!this._auto(s)) this._turnTimer(s);
       this._flush();
       return;
     }
@@ -606,7 +731,7 @@ export class Table {
     this.dealer = [];
     for (const s of this.seats) {
       s.hand = []; s.split = null; s.done = false; s.result = null;
-      s.insurance = 0; s.insResponded = false;
+      s.insurance = 0; s.insResponded = false; s.tbankOn = false;
       // LA MISE À RÉPÉTER se retient ICI, au moment où elle est engagée : plus
       // tard, `s.side` aura été remis à zéro par le règlement du 21+3 et un
       // double aurait faussé `s.bet`.
@@ -681,7 +806,7 @@ export class Table {
       const s = this.seats[i];
       if (s.bet > 0 && this._activeHand(s)) {
         this.turn = i;
-        this._setPhase("player", this._auto(s) ? 1200 : T.turn);
+        this._turnTimer(s);
         this._flush();
         return;
       }
@@ -760,12 +885,26 @@ export class Table {
       // on allume le feu à la main N, il paie à la main N+1.
       const before = heatOf(s.streak);
       const net = back - stake;
+      // LE CUMUL EST CELUI DU JOUEUR, PAS DE LA PLACE. Il vit sur son
+      // portefeuille — donc sur son profil, qui le suit d'une table à l'autre
+      // et d'une session à la suivante. Sur la place, il aurait été hérité :
+      // les mains du figurant qui l'occupait avant lui, puis celles du joueur
+      // suivant, auraient nourri un déficit qui n'est pas le sien. Les
+      // figurants jouent avec un portefeuille de maison, neuf par place : leurs
+      // compteurs restent les leurs.
+      const w = s.wallet;
+      w.staked = (w.staked || 0) + stake;
+      w.back = (w.back || 0) + back;
       let bonus = 0, potLost = 0;
       if (net > 0) {
         // le multiplicateur ne mord que sur le bénéfice, jamais sur la mise rendue.
-        // Le bonus ne rejoint PAS le paiement : il tombe dans la cagnotte, au
-        // double — c'est le prix du risque qu'on prend à l'y laisser.
-        bonus = Math.round(net * (before.mult - 1)) * POT_BOOST;
+        // Le bonus ne rejoint PAS le paiement : il tombe dans la cagnotte —
+        // net × (mult − 1), pour que la main gagnée vaille exactement le
+        // multiplicateur affiché (voir le bloc CAGNOTTE DE SÉRIE).
+        bonus = Math.round(net * (before.mult - 1));
+        // ...mais jamais au-delà de ce que la place a laissé à la maison.
+        const room = Math.max(0, Math.round((w.staked - w.back) * POT_SHARE) - s.pot);
+        bonus = Math.min(bonus, room);
         s.pot += bonus;
         s.streak++;
       } else if (net < 0) {
@@ -774,6 +913,16 @@ export class Table {
         s.pot = 0;
         s.streak = 0;
       }
+      // ...et le plafond joue DANS LES DEUX SENS : un gain qui comble le
+      // déficit rabote la cagnotte d'autant. Sans ça la règle « le cumul
+      // dépensé, moins ce qui a été gagné » ne serait vraie qu'à la hausse, et
+      // une cagnotte bâtie sur des pertes survivrait au coup qui les efface.
+      // Le rabotage est SILENCIEUX : il ne rejoint pas `potLost`, qui déclenche
+      // côté client l'alarme rouge « cagnotte perdue » (toast, brûlure, arrêt
+      // sur image). Annoncer une perte au joueur qui vient de GAGNER serait un
+      // contresens ; le nouveau montant part de toute façon dans `pot`.
+      const ceil = Math.max(0, Math.round((w.staked - w.back) * POT_SHARE));
+      if (s.pot > ceil) s.pot = ceil;
       const brokeAt = net < 0 ? before.tier : 0;
       const heat = heatOf(s.streak);
       s.wallet.cash += back;
@@ -845,6 +994,9 @@ export class Table {
         const s = this.turn !== null ? this.seats[this.turn] : null;
         const ah = s ? this._activeHand(s) : null;
         if (s && ah) {
+          // la banque de temps d'abord : elle rend la main à son joueur au lieu
+          // de la lui figer sur RESTER
+          if (this._grantTime(s)) break;
           this._markDone(s, ah.h);
           this._push({ t: "timeout", seat: s.i });
           this._advance(s);

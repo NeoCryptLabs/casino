@@ -133,7 +133,9 @@ export class Net {
     ws.onmessage = (ev) => {
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
-      this._handle(m);
+      // un message mal digéré ne doit pas tuer la liaison : on le signale et
+      // on laisse le suivant resynchroniser (l'état complet revoyage sans arrêt)
+      try { this._handle(m); } catch (e) { console.error("[net] message", m && m.t, "en échec :", e); }
     };
     ws.onclose = () => {
       this.connected = false;

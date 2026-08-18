@@ -180,8 +180,13 @@ export class Chips {
   }
 
   _gc() {
-    while (this.pool.length > this.max) {
-      const old = this.pool.shift();
+    // `metadata.keep` marque la banque du joueur : elle vaut son portefeuille,
+    // le GC n'a pas le droit d'en manger le bas — il saute au suivant.
+    let i = 0;
+    while (this.pool.length > this.max && i < this.pool.length) {
+      const old = this.pool[i];
+      if (old && !old.isDisposed() && old.metadata?.keep) { i++; continue; }
+      this.pool.splice(i, 1);
       if (old && !old.isDisposed()) {
         if (old.metadata?.agg) old.metadata.agg.dispose();
         old.dispose();
@@ -227,13 +232,17 @@ export class Chips {
     return tflight;
   }
 
-  /** Fait glisser une pile entière vers une cible (paiement du croupier). */
-  slideStack(chips, target, delay = 60) {
-    let n = 0;
+  /**
+   * Fait glisser une pile entière vers une cible (paiement du croupier).
+   * `base` : étage du premier jeton — à fournir quand la cible porte déjà une
+   * pile (sinon les arrivants se figent DANS les jetons en place).
+   */
+  slideStack(chips, target, delay = 60, base = 0) {
+    let n = base;
     chips.forEach((c, i) =>
       setTimeout(() => {
         if (c.isDisposed()) return;
-        const dst = target.add(V3(rnd(-0.006, 0.006), CHIP_H / 2 + (n++) * CHIP_H, rnd(-0.006, 0.006)));
+        const dst = target.add(V3(rnd(-0.002, 0.002), CHIP_H / 2 + (n++) * CHIP_H, rnd(-0.002, 0.002)));
         this.toss(c, dst, { arc: 0.18 });
       }, i * delay)
     );

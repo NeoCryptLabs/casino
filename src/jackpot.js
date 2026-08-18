@@ -21,10 +21,10 @@ const B = BABYLON;
 const W = 1024, H = 320;
 
 export function createJackpot({ scene, audio, ui }) {
-  // Sur le mur du pit (+X), au-dessus de la table du milieu : visible des trois
-  // places assises comme de l'allée centrale.
+  // Sur le mur du pit (+X), au-dessus du néon BLACKJACK : la baie de la scène
+  // occupe le mur derrière les tables, l'enseigne se pose sur le segment voisin.
   const hw = LAYOUT.hall.w / 2;
-  const pos = V3(hw - 0.34, 5.15, LAYOUT.blackjack1.z);
+  const pos = V3(hw - 0.34, 5.6, 10.6);
 
   const dt = new B.DynamicTexture("jpSign", { width: W, height: H }, scene, false);
   dt.hasAlpha = true;
