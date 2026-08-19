@@ -390,6 +390,21 @@ export class People {
       npc._sync();
       npc._snapshot();
     }
+    // BOÎTES ENGLOBANTES SUR LA POSE RÉELLE. Celles d'un maillage skinné
+    // datent du bind (T-pose debout) : un pantin ASSIS, plié et descendu de
+    // 40 cm, déborde de sa sphère d'origine — et le test de visibilité
+    // (« inclusion optimiste + sphère seule », main.js) coupe alors le
+    // figurant à l'écran sous certains angles, surtout de loin où la sphère
+    // est petite. Les figurants posés une fois pour toutes reçoivent des
+    // bornes recalculées sur leur squelette ; les personnages ANIMÉS par
+    // clips (avatars réseau, chanteuse) bougent sans arrêt — eux passent
+    // hors test de visibilité, c'est quelques maillages seulement.
+    for (const m of model.getChildMeshes()) {
+      if (!m.skeleton) continue;
+      if (o.avatar || o.singer) { m.alwaysSelectAsActiveMesh = true; continue; }
+      try { m.refreshBoundingInfo({ applySkeleton: true }); }
+      catch (e) { try { m.refreshBoundingInfo(true); } catch (e2) { m.alwaysSelectAsActiveMesh = true; } }
+    }
     this.list.push(npc);
     return npc;
   }
@@ -565,15 +580,16 @@ class NPC {
         .add(right.scale(s * 0.15 * S))
         .add(fwd.scale(0.02 * S))
         .add(new B.Vector3(0, 0.10 * S, 0)));
-      // Main : cible à peine de l'autre côté de l'axe, devant le ventre.
-      // `_aim` ne fait que pointer l'os — la main s'arrête à la longueur de
-      // l'avant-bras, donc viser légèrement croisé pose les mains l'une sur
-      // l'autre sans les interpénétrer (leçon de la version « dans le dos »).
+      // Main : chacune reste de SON côté, posée devant la ceinture. La
+      // version « légèrement croisé » superposait les mains — sur les modèles
+      // de personnel SANS os de doigts (rig 21 os, main cuite ouverte), deux
+      // mains ouvertes qui se chevauchent se lisent comme une pince difforme.
+      // Écartées de ~20 cm et un peu plus basses, elles tombent naturelles.
       // Le réglage fin se fait au mode pose (F2 -> clic figurant).
       this._aim(fore, hand, h
-        .add(right.scale(s * -0.03 * S))
-        .add(fwd.scale(0.20 * S))
-        .add(new B.Vector3(0, 0.07 * S, 0)));
+        .add(right.scale(s * 0.10 * S))
+        .add(fwd.scale(0.21 * S))
+        .add(new B.Vector3(0, 0.03 * S, 0)));
     }
     this._snapshot();
   }
