@@ -11,6 +11,7 @@
  * ctx = { engine, scene, player, world, pipe, ssao, audio, heat, net }
  */
 
+import { MOBILE, thawMats } from "./util.js";
 
 const STORE = "mirage.settings.v1";
 // marqueur du recalage Windows (voir constructeur) : posé une fois, jamais relu
@@ -31,9 +32,9 @@ export const DEFS = [
   {
     key: "resolution", group: "image", type: "enum",
     label: "Qualité de rendu", hint: "résolution interne",
-    // Windows : GPU intégrés fréquents + rendu via ANGLE/D3D — on part de
-    // NORMALE (le joueur peut toujours remonter dans ce menu)
-    def: 1.25,
+    // Mobile : BASSE (GPU de téléphone). Ailleurs, pleine qualité — les
+    // dégradations Windows ont sauté avec le correctif des blocs uniformes.
+    def: MOBILE ? 0.75 : 1.25,
     options: [
       { v: 0.75, label: "BASSE" },
       { v: 1, label: "NORMALE" },
@@ -47,13 +48,16 @@ export const DEFS = [
   {
     key: "shadows", group: "image", type: "enum",
     label: "Ombres", hint: "lustres, projecteurs, table",
-    def: "high",
+    def: MOBILE ? "low" : "high",
     options: [
       { v: "off", label: "AUCUNE" },
       { v: "low", label: "BASSES" },
       { v: "high", label: "HAUTES" },
     ],
     apply(v, { world }) {
+      // activer/couper une ombre change les defines d'éclairage : les
+      // matériaux gelés (util.freezeMat) doivent pouvoir recompiler
+      thawMats();
       const on = v !== "off";
       world.shadowGens.forEach((sg, i) => {
         const light = sg.getLight?.();
@@ -62,15 +66,22 @@ export const DEFS = [
         if (!map) return;
         // [0] = la table principale : cartes et jetons bougent, elle se
         // rafraîchit le plus souvent. Les autres sont du décor.
+        // BASSES : bar/fontaine/machines ([1..3]) sont rendus UNE fois puis
+        // FIGÉS — c'est du décor, il ne bouge pas ; world.refreshShadows()
+        // (main.js) re-rend à la demande (chargements tardifs, éditeur).
+        // Les TROIS tables ([0], [4], [5]) restent vivantes : cartes et
+        // jetons y bougent dès qu'on s'y assied.
+        const table = i === 0 || i >= 4;
         map.refreshRate = !on ? RT().REFRESHRATE_RENDER_ONCE
-          : v === "high" ? (i ? 2 : 1) : (i ? 4 : 2);
+          : v === "high" ? (i ? 2 : 1)
+          : table ? (i ? 4 : 2) : RT().REFRESHRATE_RENDER_ONCE;
       });
     },
   },
   {
     key: "ssao", group: "image", type: "toggle",
     label: "Occlusion ambiante", hint: "contact au sol, coûteux",
-    def: true,
+    def: !MOBILE,
     apply(v, ctx) {
       const { scene, ssao, player } = ctx;
       if (!ssao) return;

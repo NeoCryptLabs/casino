@@ -112,6 +112,9 @@ export class Player {
   /** Verrouille la souris. Chrome refuse un verrouillage demandé trop tôt
    *  après un Échap : on retente une fois, sans bruit. */
   lock() {
+    // Tactile (src/mobile.js) : le pointer lock n'existe pas au doigt — toute
+    // tentative (et surtout son rattrapage à 500 ms) sèmerait des états faux.
+    if (this.noPointerLock) return;
     clearTimeout(this._relock);
     this._relock = null;
     // ASSIS, ON NE VERROUILLE JAMAIS. À une table, à une machine ou au bar, la
@@ -173,11 +176,15 @@ export class Player {
       // souris sert alors aux boutons de jeu sans faire dériver la vue.
       // Actif seulement une fois l'animation d'assise finie (lookBase posé),
       // sinon on écraserait l'interpolation en cours.
-      if (this.lookBase && this._mouse) {
+      if (this.lookBase && (this._mouse || this.touchLook)) {
         const L = this.limits || { yaw: 0.55, up: 0.32, down: 0.28 };
+        // Tactile : le glissement (src/mobile.js) alimente le MÊME offset
+        // normalisé que la parallaxe — il persiste au relâché, pas de Maj.
         const peek = this.keys.has("ShiftLeft") || this.keys.has("ShiftRight");
-        const nx = peek ? clamp((this._mouse.x / innerWidth) * 2 - 1, -1, 1) : 0;
-        const ny = peek ? clamp((this._mouse.y / innerHeight) * 2 - 1, -1, 1) : 0;
+        const nx = this.touchLook ? this.touchLook.nx
+          : peek ? clamp((this._mouse.x / innerWidth) * 2 - 1, -1, 1) : 0;
+        const ny = this.touchLook ? this.touchLook.ny
+          : peek ? clamp((this._mouse.y / innerHeight) * 2 - 1, -1, 1) : 0;
         const ty = this.lookBase.y + nx * L.yaw;
         const tx = this.lookBase.x + (ny > 0 ? ny * L.down : ny * L.up);
         const k = Math.min(1, dt * 6.5);
@@ -193,13 +200,20 @@ export class Player {
     this._bobApplied = 0;
 
     const k = this.keys;
-    const run = k.has("ShiftLeft") || k.has("ShiftRight");
+    const run = k.has("ShiftLeft") || k.has("ShiftRight") || !!this.touchMove?.run;
     const speed = (run ? 4.5 : 2.3) * dt;
     let f = 0, s = 0;
     if (k.has("KeyW") || k.has("KeyZ") || k.has("ArrowUp")) f += 1;
     if (k.has("KeyS") || k.has("ArrowDown")) f -= 1;
     if (k.has("KeyA") || k.has("KeyQ") || k.has("ArrowLeft")) s -= 1;
     if (k.has("KeyD") || k.has("ArrowRight")) s += 1;
+    // joystick tactile : vecteur ANALOGIQUE (l'inclinaison dose la vitesse) —
+    // il s'ajoute aux touches, la normalisation plus bas borne le cumul
+    if (this.touchMove) { f += this.touchMove.f; s += this.touchMove.s; }
+
+    // Au clavier la norme vaut 1 ou √2 ; au joystick elle est FRACTIONNAIRE
+    // (l'inclinaison dose la vitesse). On ne rabat donc que l'excès.
+    const mag = Math.min(1, Math.hypot(f, s));
 
     // Détecteur de blocage : intention de mouvement sans déplacement réel
     // pendant 0,5 s -> on prévient (main.js nomme alors les solides voisins).
@@ -209,8 +223,10 @@ export class Player {
         const moved = Math.hypot(cam.position.x - lp.x, cam.position.z - lp.z);
         // 0,15 n'attrapait que l'immobilité TOTALE : glisser le long d'un mur
         // ou n'avancer qu'au quart passait sous le radar, alors que c'est
-        // exactement ce qu'on ressent comme « je bloque ». Seuil remonté.
-        if (moved < speed * 0.35) {
+        // exactement ce qu'on ressent comme « je bloque ». Seuil remonté —
+        // et proportionné à l'intention : au joystick à peine incliné, le
+        // pas est court par CHOIX, pas par blocage.
+        if (moved < speed * mag * 0.35) {
           this._stuckT = (this._stuckT || 0) + dt;
           if (this._stuckT > 0.5) { this._stuckT = -2.0; this.onStuck?.(); }
         } else if (this._stuckT > 0) this._stuckT = 0;
@@ -220,7 +236,9 @@ export class Player {
 
     if (f || s) {
       const n = Math.hypot(f, s);
-      f /= n; s /= n;
+      // direction unitaire × amplitude bornée : le clavier garde sa pleine
+      // vitesse, le joystick sa progressivité
+      f = (f / n) * mag; s = (s / n) * mag;
       const fwd = cam.getDirection(B.Axis.Z);
       const right = cam.getDirection(B.Axis.X);
       fwd.y = 0; right.y = 0;
@@ -228,7 +246,7 @@ export class Player {
       // Babylon applique les collisions sur cameraDirection
       cam.cameraDirection.addInPlace(fwd.scale(f * speed).add(right.scale(s * speed)));
 
-      this.stepPhase += dt * (run ? 10.5 : 6.6);
+      this.stepPhase += dt * (run ? 10.5 : 6.6) * Math.max(0.55, mag);
       const b = Math.abs(Math.sin(this.stepPhase)) * (run ? 0.045 : 0.026) * this.bobScale;
       this.bob += (b - this.bob) * 0.3;
       if (this.stepPhase > (this._lastStep || 0) + Math.PI) {
@@ -288,6 +306,7 @@ export class Player {
       this._savedRot = this.camera.rotation.clone();
     }
     this.limits = limits || { yaw: 0.55, up: 0.32, down: 0.28 };
+    this.touchLook = null;         // chaque assise commence le regard au centre
 
     const d = lookTarget.subtract(eyePos);
     const yaw = Math.atan2(d.x, d.z);
@@ -359,6 +378,7 @@ export class Player {
    */
   stand(onDone, at = null) {
     document.body.classList.remove("seated");
+    this.touchLook = null;
     const back = at || this._savedPos || this.camera.position.clone();
     this._savedPos = null;
     const target = this._savedRot || this.camera.rotation.clone();

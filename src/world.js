@@ -1,5 +1,5 @@
 /** Architecture du casino : sol, murs, plafond, piliers, lustres, éclairage. */
-import { V3, C3, pbr, gold, canvasTex, normalMap, rnd, rndInt, merge } from "./util.js";
+import { V3, C3, pbr, gold, canvasTex, normalMap, rnd, rndInt, merge, MOBILE } from "./util.js";
 const B = BABYLON;
 
 /**
@@ -124,6 +124,11 @@ export function buildWorld(scene) {
   const { hall } = LAYOUT;
   const casters = [];
   const shadowGens = [];
+  // le décor immuable : matrices monde gelées et matériaux `freeze()`és en fin
+  // de construction — Babylon cesse de les re-valider à chaque frame
+  const statics = [];
+  const staticMats = [];
+  const caps = [];   // chapiteaux dorés (colonnes + portique), soudés en un mesh
 
   /* ---------- environnement / IBL ---------- */
   const env = new B.CubeTexture(
@@ -149,15 +154,13 @@ export function buildWorld(scene) {
     const s = new B.SpotLight(name, pos, dir, angle, 6, scene);
     s.intensity = intens; s.diffuse = color; s.specular = color; s.range = range;
     if (shadows) {
-      // Les cartes étaient réduites de moitié sur Windows (512, PCF minimal)
-      // pour fuir une compilation D3D qui gelait le chargement. La vraie cause
-      // était le dépassement de blocs uniformes (cf. lightBudget), désormais
-      // corrigé — et la frame est limitée par la SOUMISSION des draw calls,
-      // pas par le GPU. Mesuré : repasser en 1024/PCF moyen coûte ~3 ms sur
-      // 58, soit le bruit de mesure. Windows retrouve donc l'image du Mac.
-      const sg = new B.ShadowGenerator(1024, s);
+      // Windows retrouve l'image du Mac depuis le correctif des blocs
+      // uniformes (cf. lightBudget) — seuls les GPU de téléphone gardent des
+      // cartes réduites (512, PCF minimal) : là, c'est bien le GPU qui plie.
+      const sg = new B.ShadowGenerator(MOBILE ? 512 : 1024, s);
       sg.usePercentageCloserFiltering = true;
-      sg.filteringQuality = B.ShadowGenerator.QUALITY_MEDIUM;
+      sg.filteringQuality = MOBILE
+        ? B.ShadowGenerator.QUALITY_LOW : B.ShadowGenerator.QUALITY_MEDIUM;
       sg.bias = 0.00035; sg.normalBias = 0.012;
       sg.darkness = 0.28;
       shadowGens.push(sg);
@@ -238,6 +241,7 @@ export function buildWorld(scene) {
   floor.receiveShadows = true;
   floor.checkCollisions = true;
   floor.metadata = { floor: true };
+  statics.push(floor);
 
   // le damas bordeaux ne couvre plus la salle : il habille le TAPIS D'HONNEUR
   const carpetMat = pbr("carpetM", scene, { color: C3(1, 1, 1), roughness: 0.94 });
@@ -254,6 +258,7 @@ export function buildWorld(scene) {
   plaza.position = V3(LAYOUT.fountain.x, 0.012, LAYOUT.fountain.z);
   plaza.material = marbleMat;
   plaza.receiveShadows = true;
+  statics.push(plaza);
 
   /* ---------- murs ---------- */
   const wallMat = pbr("wallM", scene, { color: C3(0.55, 0.4, 0.28), roughness: 0.75 });
@@ -276,7 +281,9 @@ export function buildWorld(scene) {
   // ...et le mur +Z s'ouvre sur la BAIE D'ENTRÉE : trémie de 10,4 m au centre,
   // linteau au-dessus des portes (le portique et les portes laiton suivent)
   const EGAP = 5.2;                      // demi-largeur de la baie d'entrée
-  const walls = [
+  // les 7 pans partagent matériau et collision : soudés en UN mesh (la
+  // géométrie ne change pas, la collision par facettes reste identique)
+  const wallsMerged = merge([
     wall(hall.w, hall.h, V3(0, hall.h / 2, -hd), 0),
     wall(hw - EGAP, hall.h, V3(-(EGAP + hw) / 2, hall.h / 2, hd), 0),
     wall(hw - EGAP, hall.h, V3((EGAP + hw) / 2, hall.h / 2, hd), 0),
@@ -284,8 +291,14 @@ export function buildWorld(scene) {
     wall(hall.d, hall.h, V3(-hw, hall.h / 2, 0), Math.PI / 2),
     wall(zLo + hd, hall.h, V3(hw, hall.h / 2, (zLo - hd) / 2), Math.PI / 2),
     wall(hd - zHi, hall.h, V3(hw, hall.h / 2, (zHi + hd) / 2), Math.PI / 2),
-  ];
+  ], "walls");
+  wallsMerged.material = wallTopMat;
+  wallsMerged.checkCollisions = true;
+  wallsMerged.receiveShadows = true;
+  const walls = [wallsMerged];
+  statics.push(wallsMerged);
   // lambris bas + cimaise dorée
+  const wnsPanels = [], wnsRails = [];
   function wainscot(w, pos, rotY) {
     const p = B.MeshBuilder.CreateBox("wns", { width: w, height: 2.4, depth: 0.22 }, scene);
     p.position = pos.clone(); p.position.y = 1.2; p.rotation.y = rotY;
@@ -293,15 +306,19 @@ export function buildWorld(scene) {
     const r = B.MeshBuilder.CreateBox("rail", { width: w, height: 0.14, depth: 0.3 }, scene);
     r.position = pos.clone(); r.position.y = 2.45; r.rotation.y = rotY;
     r.material = wainscotMat;
-    return [p, r];
+    wnsPanels.push(p); wnsRails.push(r);
   }
-  const trim = [];
-  trim.push(...wainscot(hall.w, V3(0, 0, -hd + 0.3), 0));
-  trim.push(...wainscot(hw - EGAP, V3(-(EGAP + hw) / 2, 0, hd - 0.3), 0));
-  trim.push(...wainscot(hw - EGAP, V3((EGAP + hw) / 2, 0, hd - 0.3), 0));
-  trim.push(...wainscot(hall.d, V3(-hw + 0.3, 0, 0), Math.PI / 2));
-  trim.push(...wainscot(zLo + hd, V3(hw - 0.3, 0, (zLo - hd) / 2), Math.PI / 2));
-  trim.push(...wainscot(hd - zHi, V3(hw - 0.3, 0, (zHi + hd) / 2), Math.PI / 2));
+  wainscot(hall.w, V3(0, 0, -hd + 0.3), 0);
+  wainscot(hw - EGAP, V3(-(EGAP + hw) / 2, 0, hd - 0.3), 0);
+  wainscot(hw - EGAP, V3((EGAP + hw) / 2, 0, hd - 0.3), 0);
+  wainscot(hall.d, V3(-hw + 0.3, 0, 0), Math.PI / 2);
+  wainscot(zLo + hd, V3(hw - 0.3, 0, (zLo - hd) / 2), Math.PI / 2);
+  wainscot(hd - zHi, V3(hw - 0.3, 0, (zHi + hd) / 2), Math.PI / 2);
+  // lambris d'un côté, cimaises de l'autre : deux meshes au lieu de douze
+  const wnsM = merge(wnsPanels, "wainscot");
+  wnsM.receiveShadows = true;
+  const railM = merge(wnsRails, "rails");
+  statics.push(wnsM, railM);
 
   /* ---------- plafond ---------- */
   const ceilMat = pbr("ceilM", scene, { color: C3(0.09, 0.06, 0.04), roughness: 0.9 });
@@ -318,15 +335,17 @@ export function buildWorld(scene) {
       coffers.push(c);
     }
   }
-  if (coffers.length) { const cm = merge(coffers, "coffers"); cm.material = gold(scene, 0.5); }
+  if (coffers.length) { const cm = merge(coffers, "coffers"); cm.material = gold(scene, 0.5); statics.push(cm); }
 
   // verrière au-dessus de la fontaine
   const dome = B.MeshBuilder.CreateSphere("dome", { diameter: 13, slice: 0.5, segments: 28 }, scene);
   dome.position = V3(LAYOUT.fountain.x, hall.h - 0.3, LAYOUT.fountain.z);
-  dome.material = pbr("domeM", scene, {
+  const domeMat = pbr("domeM", scene, {
     color: C3(0.5, 0.65, 0.85), roughness: 0.1, metallic: 0.2, alpha: 0.25, backFaceCulling: false,
     emissive: C3(0.06, 0.09, 0.14),
   });
+  dome.material = domeMat;
+  statics.push(dome, ceil);
 
   /* ---------- piliers ---------- */
   const colMat = pbr("colM", scene, { color: C3(1, 1, 1), roughness: 0.24, metallic: 0.05 });
@@ -337,34 +356,49 @@ export function buildWorld(scene) {
     const shaft = B.MeshBuilder.CreateCylinder("col", { height: hall.h - 0.6, diameter: 1.05, tessellation: 24 }, scene);
     shaft.position = V3(px, (hall.h - 0.6) / 2, pz);
     shaft.material = colMat; shaft.checkCollisions = true; shaft.receiveShadows = true;
-    casters.push(shaft);
+    casters.push(shaft); statics.push(shaft);
     for (const y of [0.35, hall.h - 0.75]) {
       const cap = B.MeshBuilder.CreateCylinder("cap", { height: 0.42, diameterTop: y < 1 ? 1.5 : 1.25, diameterBottom: y < 1 ? 1.25 : 1.5, tessellation: 24 }, scene);
       cap.position = V3(px, y, pz); cap.material = capMat;
+      caps.push(cap);
     }
   }
 
   /* ---------- lustres ---------- */
   const crystalMat = pbr("crys", scene, { color: C3(1, 0.95, 0.8), roughness: 0.05, metallic: 0.1, alpha: 0.6, emissive: C3(0.4, 0.32, 0.19) });
+  const coreMat = pbr("coreM", scene, { color: C3(1, 0.9, 0.7), emissive: C3(1.0, 0.72, 0.4) });
   function chandelier(x, z, scale = 1) {
+    // TROIS meshes par lustre, pas ~33 : un lustre c'était 30 cristaux, 3
+    // anneaux, une tige et un cœur — autant de draw calls chacun. Les cristaux
+    // puis l'armature dorée sont soudés en position monde (un lustre ne bouge
+    // jamais) ; seul le cœur émissif reste à part (matériau propre).
     const root = new B.TransformNode("chand", scene);
     root.position = V3(x, hall.h - 1.4, z);
     root.scaling = V3(scale, scale, scale);
+    const golds = [], crystals = [];
     const rod = B.MeshBuilder.CreateCylinder("rod", { height: 1.3, diameter: 0.06 }, scene);
     rod.position.y = 0.9; rod.material = gold(scene, 0.7); rod.parent = root;
+    golds.push(rod);
     for (const [r, y, n] of [[0.95, 0, 14], [0.65, 0.4, 10], [0.35, 0.75, 6]]) {
       const ring = B.MeshBuilder.CreateTorus("ring", { diameter: r * 2, thickness: 0.05, tessellation: 32 }, scene);
       ring.position.y = y; ring.material = gold(scene, 0.8); ring.parent = root;
+      golds.push(ring);
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2;
         const c = B.MeshBuilder.CreateSphere("crys", { diameter: 0.13, segments: 6 }, scene);
         c.position = V3(Math.cos(a) * r, y - 0.16, Math.sin(a) * r);
         c.scaling.y = 1.9; c.material = crystalMat; c.parent = root;
+        crystals.push(c);
       }
     }
     const core = B.MeshBuilder.CreateSphere("core", { diameter: 0.5, segments: 10 }, scene);
-    core.material = pbr("coreM", scene, { color: C3(1, 0.9, 0.7), emissive: C3(1.0, 0.72, 0.4) });
+    core.material = coreMat;
     core.parent = root;
+    root.computeWorldMatrix(true);
+    [...golds, ...crystals, core].forEach((m) => m.computeWorldMatrix(true));
+    const g = merge(golds, "chandGold");
+    const cr = merge(crystals, "chandCrys");
+    statics.push(g, cr, core);
     return root;
   }
   chandelier(LAYOUT.fountain.x, LAYOUT.fountain.z, 1.6);
@@ -389,6 +423,7 @@ export function buildWorld(scene) {
     m.emissiveTexture = tex; m.emissiveColor = C3(1, 1, 1);
     m.disableLighting = true; m.backFaceCulling = false;
     p.material = m;
+    statics.push(p); staticMats.push(m);
     return p;
   }
   neon("SLOTS", V3(-hw + 0.35, 4.6, 1.2), Math.PI / 2, "#ff2d6f", 0.5);
@@ -398,12 +433,23 @@ export function buildWorld(scene) {
 
   /* ---------- appliques murales ---------- */
   const sconceMat = pbr("scM", scene, { color: C3(1, 0.75, 0.4), emissive: C3(1.0, 0.6, 0.22), alpha: 0.85 });
-  for (let i = -4; i <= 4; i++) {
-    for (const [x, z, ry] of [[i * 6, -hd + 0.45, 0], [i * 6, hd - 0.45, Math.PI], [-hw + 0.45, i * 4.5, Math.PI / 2], [hw - 0.45, i * 4.5, -Math.PI / 2]]) {
-      const s = B.MeshBuilder.CreateCylinder("sc", { height: 0.55, diameterTop: 0.34, diameterBottom: 0.1, tessellation: 12 }, scene);
-      s.position = V3(x, 3.3, z); s.material = sconceMat;
-      s.rotation.y = ry;
+  {
+    // 36 appliques identiques = UN mesh soudé (elles ne bougent jamais)
+    const sconces = [];
+    for (let i = -4; i <= 4; i++) {
+      for (const [x, z, ry] of [[i * 6, -hd + 0.45, 0], [i * 6, hd - 0.45, Math.PI], [-hw + 0.45, i * 4.5, Math.PI / 2], [hw - 0.45, i * 4.5, -Math.PI / 2]]) {
+        // pas d'applique dans la baie de scène : le mur y est ouvert, elles
+        // flottaient dans le vide (c'était les surcharges sc#19/sc#23 de
+        // layout.json, absorbées ici depuis la fusion des appliques)
+        if (x > hw - 1 && z > zLo && z < zHi) continue;
+        const s = B.MeshBuilder.CreateCylinder("sc", { height: 0.55, diameterTop: 0.34, diameterBottom: 0.1, tessellation: 12 }, scene);
+        s.position = V3(x, 3.3, z); s.material = sconceMat;
+        s.rotation.y = ry;
+        sconces.push(s);
+      }
     }
+    const sc = merge(sconces, "sconces");
+    statics.push(sc);
   }
 
   /* ---------- plantes & mobilier d'ambiance ---------- */
@@ -414,17 +460,26 @@ export function buildWorld(scene) {
   const plantMeshes = [];
   const leafMat = pbr("leaf", scene, { color: C3(0.09, 0.22, 0.09), roughness: 0.75, backFaceCulling: false });
   const potMat = pbr("pot", scene, { color: C3(0.12, 0.12, 0.14), roughness: 0.35, metallic: 0.5 });
-  for (const [x, z] of plantSpots) {
-    const pot = B.MeshBuilder.CreateCylinder("pot", { height: 0.7, diameterTop: 0.75, diameterBottom: 0.55, tessellation: 16 }, scene);
-    pot.position = V3(x, 0.35, z); pot.material = potMat; pot.checkCollisions = true;
-    casters.push(pot); plantMeshes.push(pot);
-    for (let i = 0; i < 14; i++) {
-      const l = B.MeshBuilder.CreatePlane("lf", { width: 0.22, height: rnd(0.9, 1.7) }, scene);
-      l.position = V3(x + rnd(-0.2, 0.2), 0.7 + rnd(0.3, 0.9), z + rnd(-0.2, 0.2));
-      l.rotation = V3(rnd(-0.5, 0.5), rnd(0, 6.28), rnd(-0.6, 0.6));
-      l.material = leafMat;
-      casters.push(l); plantMeshes.push(l);
+  {
+    // 8 pots + 112 feuilles : les feuilles (même matériau, jamais déplacées)
+    // sont soudées en UN mesh ; les pots restent séparés (collision chacun).
+    // `plantMeshes` garde la liste complète : venues.js la dispose telle
+    // quelle quand les vraies plantes (Poly Haven) prennent le relais.
+    const leaves = [];
+    for (const [x, z] of plantSpots) {
+      const pot = B.MeshBuilder.CreateCylinder("pot", { height: 0.7, diameterTop: 0.75, diameterBottom: 0.55, tessellation: 16 }, scene);
+      pot.position = V3(x, 0.35, z); pot.material = potMat; pot.checkCollisions = true;
+      casters.push(pot); plantMeshes.push(pot); statics.push(pot);
+      for (let i = 0; i < 14; i++) {
+        const l = B.MeshBuilder.CreatePlane("lf", { width: 0.22, height: rnd(0.9, 1.7) }, scene);
+        l.position = V3(x + rnd(-0.2, 0.2), 0.7 + rnd(0.3, 0.9), z + rnd(-0.2, 0.2));
+        l.rotation = V3(rnd(-0.5, 0.5), rnd(0, 6.28), rnd(-0.6, 0.6));
+        l.material = leafMat;
+        leaves.push(l);
+      }
     }
+    const lm = merge(leaves, "leaves");
+    casters.push(lm); plantMeshes.push(lm); statics.push(lm);
   }
 
   /* ---------- l'ARRIVÉE : tapis d'honneur, axe de marbre, portique ---------- */
@@ -433,6 +488,7 @@ export function buildWorld(scene) {
   redCarpet.position = V3(0, 0.012, 12.9);
   redCarpet.material = carpetMat;
   redCarpet.receiveShadows = true;
+  statics.push(redCarpet);
   // incrustation d'axe en marbre clair, du tapis jusqu'au bar (3,4 × 22 à z 2).
   // Texture à l'aspect de la bande (1:6,5), sinon les veines filent en stries.
   const axisMat = pbr("axisM", scene, { color: C3(0.62, 0.59, 0.54), metallic: 0.06, roughness: 0.16 });
@@ -441,43 +497,57 @@ export function buildWorld(scene) {
   axis.position = V3(0, 0.014, 2.0);
   axis.material = axisMat;
   axis.receiveShadows = true;
+  statics.push(axis);
 
   // portique : dalle à y 4,6, deux colonnes r 0,45 en x ±4,6, portes laiton
   const porticoSlab = B.MeshBuilder.CreateBox("portico", { width: 10.4, height: 0.5, depth: 2.2 }, scene);
   porticoSlab.position = V3(0, 4.65, hd);
   porticoSlab.material = wallTopMat;
+  statics.push(porticoSlab);
   for (const px of [-4.6, 4.6]) {
     const c = B.MeshBuilder.CreateCylinder("porticoCol", { height: 4.4, diameter: 0.9, tessellation: 24 }, scene);
     c.position = V3(px, 2.2, hd - 0.4);
     c.material = colMat; c.checkCollisions = true; c.receiveShadows = true;
-    casters.push(c);
+    casters.push(c); statics.push(c);
     const cap = B.MeshBuilder.CreateCylinder("porticoCap", { height: 0.34, diameterTop: 1.15, diameterBottom: 0.95, tessellation: 24 }, scene);
     cap.position = V3(px, 4.35, hd - 0.4); cap.material = capMat;
+    caps.push(cap);
   }
+  // colonnes + portique : tous les chapiteaux dorés en un seul mesh
+  if (caps.length) statics.push(merge(caps, "caps"));
   // portes laiton fermées : le casino ne se quitte pas à pied
   const doorMat = gold(scene, 0.55);
   for (const px of [-2.2, 2.2]) {
     const door = B.MeshBuilder.CreateBox("brassDoor", { width: 4.35, height: 4.4, depth: 0.14 }, scene);
     door.position = V3(px, 2.2, hd - 0.05);
     door.material = doorMat; door.checkCollisions = true; door.receiveShadows = true;
+    statics.push(door);
   }
 
   // cordons de velours le long du tapis d'honneur
   const ropeMat = pbr("rope", scene, { color: C3(0.4, 0.05, 0.07), roughness: 0.9 });
-  for (let i = -1; i <= 1; i += 2) {
-    for (let k = 0; k < 3; k++) {
-      const p = B.MeshBuilder.CreateCylinder("post", { height: 1, diameter: 0.09 }, scene);
-      // pas de collision : un poteau de 9 cm avec le halo caméra faisait un
-      // pilier fantôme de 60 cm en pleine allée d'entrée
-      p.position = V3(i * 4.2, 0.5, 16.4 - k * 3); p.material = gold(scene, 0.7);
-      const b = B.MeshBuilder.CreateSphere("pb", { diameter: 0.18 }, scene);
-      b.position = V3(i * 4.2, 1.05, 16.4 - k * 3); b.material = gold(scene, 0.9);
-      if (k < 2) {
-        const r = B.MeshBuilder.CreateCylinder("rp", { height: 3, diameter: 0.06 }, scene);
-        r.position = V3(i * 4.2, 0.86, 14.9 - k * 3);
-        r.rotation = V3(Math.PI / 2, 0, 0); r.material = ropeMat;
+  {
+    // trois familles (poteaux, pommeaux, cordons) = trois meshes soudés
+    const posts = [], balls = [], cords = [];
+    for (let i = -1; i <= 1; i += 2) {
+      for (let k = 0; k < 3; k++) {
+        const p = B.MeshBuilder.CreateCylinder("post", { height: 1, diameter: 0.09 }, scene);
+        // pas de collision : un poteau de 9 cm avec le halo caméra faisait un
+        // pilier fantôme de 60 cm en pleine allée d'entrée
+        p.position = V3(i * 4.2, 0.5, 16.4 - k * 3); p.material = gold(scene, 0.7);
+        posts.push(p);
+        const b = B.MeshBuilder.CreateSphere("pb", { diameter: 0.18 }, scene);
+        b.position = V3(i * 4.2, 1.05, 16.4 - k * 3); b.material = gold(scene, 0.9);
+        balls.push(b);
+        if (k < 2) {
+          const r = B.MeshBuilder.CreateCylinder("rp", { height: 3, diameter: 0.06 }, scene);
+          r.position = V3(i * 4.2, 0.86, 14.9 - k * 3);
+          r.rotation = V3(Math.PI / 2, 0, 0); r.material = ropeMat;
+          cords.push(r);
+        }
       }
     }
+    statics.push(merge(posts, "posts"), merge(balls, "postBalls"), merge(cords, "ropes"));
   }
 
   // Pas de collision invisible sur la fontaine : la vasque (`basin`,
@@ -485,7 +555,17 @@ export function buildWorld(scene) {
   // qui existait ici doublait cette collision sur 2 m de haut — on butait dans
   // le vide bien au-dessus de la pierre visible.
 
-  return { lights, shadowGens, casters, glow, floor, plaza, walls, plantSpots, plantMeshes };
+  /* ---------- gel du décor ---------- */
+  // Tout ce qui précède ne bouge JAMAIS : matrice monde calculée une fois pour
+  // toutes (l'éditeur dégèle explicitement ce qu'il attrape, voir editor.js).
+  for (const m of statics) if (m && !m.isDisposed()) m.freezeWorldMatrix();
+  // Matériaux propres au décor — gelés par main.js une fois les shaders
+  // compilés. Les ors (goldCache) sont EXCLUS : partagés avec des objets
+  // dynamiques (jetons, cartes) créés après le gel.
+  staticMats.push(floorMat, carpetMat, marbleMat, wallMat, wallTopMat, ceilMat,
+    colMat, crystalMat, coreMat, sconceMat, leafMat, potMat, ropeMat, axisMat, domeMat);
+
+  return { lights, shadowGens, casters, glow, floor, plaza, walls, plantSpots, plantMeshes, staticMats };
 }
 
 /** Autorise plus de 4 lumières simultanées sur tous les matériaux. */

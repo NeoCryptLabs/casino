@@ -46,6 +46,14 @@ export function lightBudget(engine) {
   }
 }
 
+/**
+ * MOBILE : écran tactile SANS pointeur fin (téléphones, tablettes). Un
+ * portable à écran tactile garde souris et clavier — il n'est pas concerné.
+ * Pilote le hub tactile (src/mobile.js) et le profil de rendu allégé.
+ */
+export const MOBILE = typeof matchMedia !== "undefined"
+  && matchMedia("(hover: none) and (pointer: coarse)").matches;
+
 /** PBR material factory with sane defaults. */
 export function pbr(name, scene, opt = {}) {
   const m = new B.PBRMetallicRoughnessMaterial(name, scene);
@@ -164,4 +172,24 @@ export function merge(list, name) {
   const m = B.Mesh.MergeMeshes(list, true, true, undefined, false, false);
   if (m) m.name = name;
   return m;
+}
+
+/**
+ * GEL DES MATÉRIAUX STATIQUES. `material.freeze()` dispense Babylon de
+ * re-valider defines et effets du matériau à chaque frame — précieux quand le
+ * décor porte des dizaines de matériaux PBR touchés par 10 lumières. Le
+ * registre existe pour l'unique cas où il faut revenir en arrière : changer
+ * le réglage « Ombres » modifie les defines d'éclairage, un matériau gelé ne
+ * recompilerait jamais. `thawMats()` dégèle tout, laisse la recompilation se
+ * faire, puis regèle.
+ */
+const frozenMats = new Set();
+export function freezeMat(m) {
+  if (!m || frozenMats.has(m)) return;
+  frozenMats.add(m);
+  m.freeze();
+}
+export function thawMats(refreezeMs = 3000) {
+  for (const m of frozenMats) m.unfreeze();
+  if (refreezeMs) setTimeout(() => { for (const m of frozenMats) m.freeze(); }, refreezeMs);
 }

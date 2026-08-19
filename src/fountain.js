@@ -1,11 +1,24 @@
 /** Fontaine centrale : eau réfléchissante/réfractive (WaterMaterial),
  *  jets de particules GPU, brume, ondulations et éclairage caustique. */
-import { V3, C3, pbr, gold, canvasTex, rnd } from "./util.js";
+import { V3, C3, pbr, gold, canvasTex, rnd, merge } from "./util.js";
 import { LAYOUT } from "./world.js";
 const B = BABYLON;
 
 export function buildFountain(scene, world) {
   const O = LAYOUT.fountain;
+  const statics = [];
+
+  /**
+   * PARTICULES SUR LE GPU quand le navigateur le permet (WebGL2) : les ~7 000
+   * gouttes étaient simulées en JavaScript sur le thread principal — position,
+   * gravité, vie de CHAQUE goutte, à chaque frame. En GPUParticleSystem la
+   * simulation vit sur la carte (transform feedback), le CPU ne touche plus
+   * rien. Même API pour tout ce qu'on utilise ; repli CPU sinon.
+   */
+  const GPU = B.GPUParticleSystem && B.GPUParticleSystem.IsSupported;
+  const mkPS = (name, cap) => GPU
+    ? new B.GPUParticleSystem(name, { capacity: cap }, scene)
+    : new B.ParticleSystem(name, cap, scene);
   const root = new B.TransformNode("fountain", scene);
   root.position = O.clone();
 
@@ -42,7 +55,11 @@ export function buildFountain(scene, world) {
   const finial = B.MeshBuilder.CreateSphere("finial", { diameter: 0.55, segments: 20 }, scene);
   finial.position = V3(O.x, 4.05, O.z); finial.material = gold(scene, 1);
 
-  [ped, bowl1, bowl2, stem, finial, lip, basin].forEach((m) => world.casters.push(m));
+  // margelle, piédestal et vasques : même pierre, jamais déplacés — UN mesh
+  const ftnStone = merge([ped, bowl1, stem, bowl2, lip], "ftnStone");
+  ftnStone.receiveShadows = true;
+  [ftnStone, finial, basin].forEach((m) => world.casters.push(m));
+  statics.push(ftnStone, finial, basin, inner);
 
   /* ---- surface d'eau (WaterMaterial) ---- */
   const water = B.MeshBuilder.CreateDisc("waterSurf", { radius: 3.24, tessellation: 96 }, scene);
@@ -64,7 +81,7 @@ export function buildFountain(scene, world) {
     waterMat.alpha = 0.92;
     waterMat.backFaceCulling = false;
     // ce que l'eau reflète / réfracte
-    [ped, bowl1, bowl2, stem, finial, lip, inner,
+    [ftnStone, finial, inner,
       scene.getMeshByName("dome"), scene.getMeshByName("ceil"), scene.getMeshByName("coffers")]
       .filter(Boolean).forEach((m) => waterMat.addToRenderList(m));
   } else {
@@ -140,7 +157,7 @@ export function buildFountain(scene, world) {
   const dropTex = new B.Texture("https://assets.babylonjs.com/textures/flare.png", scene);
 
   function jet(pos, dir, power, rate, size, life, color1, color2) {
-    const ps = new B.ParticleSystem("jet", 2200, scene);
+    const ps = mkPS("jet", 2200);
     ps.particleTexture = dropTex;
     ps.emitter = pos;
     ps.minEmitBox = V3(-0.03, 0, -0.03);
@@ -166,7 +183,7 @@ export function buildFountain(scene, world) {
     new B.Color4(0.75, 0.92, 1, 0.85), new B.Color4(0.95, 1, 1, 0.6)));
 
   function ringBase(name, y, rate, life, size, power) {
-    const ps = new B.ParticleSystem(name, 2600, scene);
+    const ps = mkPS(name, 2600);
     ps.particleTexture = dropTex;
     ps.emitter = V3(O.x, y, O.z);
     ps.color1 = new B.Color4(0.72, 0.9, 1, 0.28);
@@ -194,7 +211,7 @@ export function buildFountain(scene, world) {
   curtain2.createCylinderEmitter(2.92, 0.03, 0.05, 0);
   curtain2.start(); jets.push(curtain2);
   // éclaboussures à la surface
-  const splash = new B.ParticleSystem("splash", 1400, scene);
+  const splash = mkPS("splash", 1400);
   splash.particleTexture = dropTex;
   splash.emitter = V3(O.x, 0.78, O.z);
   splash.createCylinderEmitter(3.0, 0.02, 0.9, 0);
@@ -210,7 +227,7 @@ export function buildFountain(scene, world) {
   splash.start();
 
   // brume
-  const mist = new B.ParticleSystem("mist", 500, scene);
+  const mist = mkPS("mist", 500);
   mist.particleTexture = new B.Texture("https://assets.babylonjs.com/textures/cloud.png", scene);
   mist.emitter = V3(O.x, 1.4, O.z);
   mist.createCylinderEmitter(3.2, 2.4, 1, 0.1);
@@ -272,15 +289,27 @@ export function buildFountain(scene, world) {
     }
   });
 
-  // pièces de monnaie au fond du bassin
-  const coinMat = gold(scene, 1);
-  for (let i = 0; i < 40; i++) {
-    const a = rnd(0, 6.28), r = rnd(0.4, 2.9);
-    const c = B.MeshBuilder.CreateCylinder("coin", { height: 0.006, diameter: 0.045, tessellation: 14 }, scene);
-    c.position = V3(O.x + Math.cos(a) * r, 0.703, O.z + Math.sin(a) * r);
-    c.rotation = V3(rnd(-0.15, 0.15), rnd(0, 6.28), rnd(-0.15, 0.15));
-    c.material = coinMat;
+  // pièces de monnaie au fond du bassin — 40 cylindres soudés en un mesh
+  {
+    const coinMat = gold(scene, 1);
+    const coins = [];
+    for (let i = 0; i < 40; i++) {
+      const a = rnd(0, 6.28), r = rnd(0.4, 2.9);
+      const c = B.MeshBuilder.CreateCylinder("coin", { height: 0.006, diameter: 0.045, tessellation: 14 }, scene);
+      c.position = V3(O.x + Math.cos(a) * r, 0.703, O.z + Math.sin(a) * r);
+      c.rotation = V3(rnd(-0.15, 0.15), rnd(0, 6.28), rnd(-0.15, 0.15));
+      c.material = coinMat;
+      coins.push(c);
+    }
+    statics.push(merge(coins, "coins"));
   }
 
-  return { root, water, waterMat, jets, splash, mist, center: O };
+  /* ---- gel ---- */
+  // pierre, eau (les surfaces, pas le matériau), nappes : rien ne bouge
+  statics.push(water, w2, w3, ...sheets);
+  for (const m of statics) if (m && !m.isDisposed()) m.freezeWorldMatrix();
+  // sheetM (défilement de texture) et waterMat (reflets par frame) restent VIFS
+  const staticMats = [stoneMat, stoneDark, inner.material];
+
+  return { root, water, waterMat, jets, splash, mist, center: O, staticMats };
 }

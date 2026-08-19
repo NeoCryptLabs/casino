@@ -1,5 +1,5 @@
 /** Machines à sous : cabinets PBR, rouleaux 3D animés, levier, marquee néon, gains. */
-import { V3, C3, pbr, gold, canvasTex, rnd, rndInt, pick, animFloat, wait } from "./util.js";
+import { V3, C3, pbr, gold, canvasTex, rnd, rndInt, pick, animFloat, wait, merge } from "./util.js";
 import { LAYOUT } from "./world.js";
 import { loadKit, place } from "./venues.js";
 const B = BABYLON;
@@ -109,6 +109,7 @@ function shared(scene) {
   const reelMat = pbr("reelM", scene, { color: C3(1, 1, 1), roughness: 0.42 });
   reelMat.baseTexture = reelTex;
   SHARED = {
+    masters: new Map(),
     reelMat, scrMat,
     body: pbr("slotBody", scene, { color: C3(0.06, 0.06, 0.08), roughness: 0.32, metallic: 0.35 }),
     glass: pbr("glassS", scene, { color: C3(0.7, 0.85, 1), roughness: 0.03, metallic: 0.1, alpha: 0.07 }),
@@ -120,6 +121,45 @@ function shared(scene) {
   };
   return SHARED;
 }
+/**
+ * INSTANCES — le cœur de la note de rendu des machines.
+ *
+ * 55 machines × ~15 pièces faisaient ~800 meshes, soit ~800 draw calls (et
+ * autant d'entrées dans CHAQUE carte d'ombre : ~5 000 au total). Toutes les
+ * pièces étant identiques d'une machine à l'autre ET partageant déjà leurs
+ * matériaux, chaque pièce devient UN maître caché ; les machines n'en posent
+ * que des instances. Le GPU dessine les 55 exemplaires d'une pièce en UN
+ * draw call, et chaque carte d'ombre ne porte plus que le maître.
+ */
+function instOf(scene, world, key, build, cast = true) {
+  const S = shared(scene);
+  let master = S.masters.get(key);
+  if (!master) {
+    master = build();
+    master.name = key;
+    master.isVisible = false;      // seul le maître se cache, pas ses instances
+    master.isPickable = false;
+    master.receiveShadows = true;
+    if (cast) world.shadowGens.forEach((sg) => sg.addShadowCaster(master));
+    S.masters.set(key, master);
+  }
+  return master.createInstance(key + "i");
+}
+
+// matériaux statiques créés hors de `shared` (épines, tabourets) : recensés
+// pour le gel des matériaux de main.js
+const EXTRA_MATS = [];
+
+/** Tous les matériaux immuables du parc, pour `freezeMat` (main.js). */
+export function slotsStaticMats() {
+  const out = [...EXTRA_MATS];
+  if (SHARED) {
+    out.push(SHARED.reelMat, SHARED.scrMat, SHARED.body, SHARED.glass,
+      SHARED.chrome, SHARED.knob, SHARED.btn, ...SHARED.marquee.values());
+  }
+  return out;
+}
+
 function marqueeMat(scene, title, hue) {
   const S = shared(scene);
   if (!S.marquee.has(title)) {
@@ -146,70 +186,106 @@ export class SlotMachine {
     const bodyMat = S.body;
     const trimMat = gold(scene, 0.95);
 
-    const add = (m, mat) => { m.parent = root; m.material = mat; world.shadowGens.forEach(sg => sg.addShadowCaster(m)); m.receiveShadows = true; return m; };
+    // chaque pièce est une INSTANCE d'un maître partagé (voir instOf)
+    const inst = (key, build, cast = true) => {
+      const m = instOf(scene, world, key, build, cast);
+      m.parent = root;
+      return m;
+    };
+    const box = (name, o, mat) => () => {
+      const m = B.MeshBuilder.CreateBox(name, o, scene);
+      m.material = mat; return m;
+    };
 
     // socle
-    const base = add(B.MeshBuilder.CreateBox("b", { width: 0.78, height: 0.95, depth: 0.72 }, scene), bodyMat);
+    const base = inst("slotBase", box("slotBase", { width: 0.78, height: 0.95, depth: 0.72 }, bodyMat));
     base.position.y = 0.475;
     // console inclinée
-    const desk = add(B.MeshBuilder.CreateBox("d", { width: 0.78, height: 0.16, depth: 0.42 }, scene), bodyMat);
+    const desk = inst("slotDesk", box("slotDesk", { width: 0.78, height: 0.16, depth: 0.42 }, bodyMat));
     desk.position.set(0, 1.02, 0.2); desk.rotation.x = -0.28;
     // corps haut
-    const upper = add(B.MeshBuilder.CreateBox("u", { width: 0.78, height: 1.0, depth: 0.5 }, scene), bodyMat);
+    const upper = inst("slotUpper", box("slotUpper", { width: 0.78, height: 1.0, depth: 0.5 }, bodyMat));
     upper.position.set(0, 1.52, -0.1);
-    // marquee
-    const mq = add(B.MeshBuilder.CreateBox("mq", { width: 0.82, height: 0.34, depth: 0.16 }, scene), marqueeMat(scene, title, hue));
+    // marquee — un maître PAR TITRE (12 textures), partagé entre machines
+    const mq = inst("slotMq:" + title, box("slotMq", { width: 0.82, height: 0.34, depth: 0.16 }, marqueeMat(scene, title, hue)));
     mq.position.set(0, 2.18, -0.06);
 
     // liserés lumineux
     const glowMat = pbr("slotGlow" + index, scene, {
       color: C3(0.1, 0.1, 0.1), emissive: C3(...hslToRgb(hue / 360, 0.9, 0.55)).scale(2.2),
     });
+    // seuls les liserés gardent un mesh propre : leur matériau (teinte et
+    // pulsation) est PAR machine — les deux barres sont soudées en un mesh
+    const strips = [];
     for (const s of [-1, 1]) {
-      const strip = add(B.MeshBuilder.CreateBox("st", { width: 0.035, height: 1.9, depth: 0.035 }, scene), glowMat);
+      const strip = B.MeshBuilder.CreateBox("st", { width: 0.035, height: 1.9, depth: 0.035 }, scene);
+      strip.parent = root; strip.material = glowMat;
       strip.position.set(s * 0.4, 1.3, 0.24);
+      strips.push(strip);
     }
+    root.computeWorldMatrix(true);
+    strips.forEach((m) => m.computeWorldMatrix(true));
+    const strip = merge(strips, "slotStrips" + index);
+    strip.material = glowMat;
+    strip.receiveShadows = true;
+    world.shadowGens.forEach(sg => sg.addShadowCaster(strip));
     this.glowMat = glowMat;
 
     // vitre + rouleaux
-    const win = add(B.MeshBuilder.CreateBox("win", { width: 0.66, height: 0.46, depth: 0.04 }, scene), S.glass);
+    const win = inst("slotWin", box("slotWin", { width: 0.66, height: 0.46, depth: 0.04 }, S.glass));
     win.position.set(0, 1.62, 0.16);
 
-    const reelMat = S.reelMat;
     this.reels = [];
     for (let i = 0; i < 3; i++) {
-      const r = B.MeshBuilder.CreateCylinder("r", { height: REEL_LEN, diameter: REEL_D, tessellation: 72 }, scene);
-      r.parent = root;
+      const r = inst("slotReel", () => {
+        const m = B.MeshBuilder.CreateCylinder("slotReel", { height: REEL_LEN, diameter: REEL_D, tessellation: 72 }, scene);
+        m.material = S.reelMat; return m;
+      });
       r.position.set((i - 1) * 0.215, 1.62, -0.02);
       r.rotation.z = Math.PI / 2;
-      r.material = reelMat;
       r.rotation.x = rnd(0, 6.28);
       this.reels.push({ mesh: r, vel: 0, target: null });
     }
 
     // écran du bas
-    const scr = add(B.MeshBuilder.CreatePlane("scr", { width: 0.62, height: 0.34 }, scene), S.scrMat);
+    const scr = inst("slotScr", () => {
+      const m = B.MeshBuilder.CreatePlane("slotScr", { width: 0.62, height: 0.34 }, scene);
+      m.material = S.scrMat; return m;
+    });
     scr.position.set(0, 1.12, 0.253); scr.rotation.x = -0.02;
 
     // boutons
+    const btns = [];
     for (let i = 0; i < 4; i++) {
-      const btn = add(B.MeshBuilder.CreateCylinder("btn", { height: 0.03, diameter: 0.08, tessellation: 16 }, scene), S.btn);
+      const btn = inst("slotBtn", () => {
+        const m = B.MeshBuilder.CreateCylinder("slotBtn", { height: 0.03, diameter: 0.08, tessellation: 16 }, scene);
+        m.material = S.btn; return m;
+      });
       btn.position.set(-0.24 + i * 0.16, 1.075, 0.31); btn.rotation.x = -0.28;
+      btns.push(btn);
     }
 
     // levier
     const lp = new B.TransformNode("leverPivot", scene);
     lp.parent = root; lp.position.set(0.47, 1.05, 0.06);
-    const arm = B.MeshBuilder.CreateCylinder("lever", { height: 0.42, diameter: 0.035 }, scene);
-    arm.parent = lp; arm.position.y = 0.21; arm.material = S.chrome;
-    const knob = B.MeshBuilder.CreateSphere("knob", { diameter: 0.11, segments: 14 }, scene);
-    knob.parent = lp; knob.position.y = 0.44; knob.material = S.knob;
-    world.shadowGens.forEach(sg => { sg.addShadowCaster(arm); sg.addShadowCaster(knob); });
+    const arm = instOf(scene, world, "slotArm", () => {
+      const m = B.MeshBuilder.CreateCylinder("slotArm", { height: 0.42, diameter: 0.035 }, scene);
+      m.material = S.chrome; return m;
+    });
+    arm.parent = lp; arm.position.y = 0.21;
+    const knob = instOf(scene, world, "slotKnob", () => {
+      const m = B.MeshBuilder.CreateSphere("slotKnob", { diameter: 0.11, segments: 14 }, scene);
+      m.material = S.knob; return m;
+    });
+    knob.parent = lp; knob.position.y = 0.44;
     this.lever = lp;
 
     // bac à monnaie
-    const tray = add(B.MeshBuilder.CreateBox("tray", { width: 0.5, height: 0.1, depth: 0.2 }, scene), trimMat);
+    const tray = inst("slotTray", box("slotTray", { width: 0.5, height: 0.1, depth: 0.2 }, trimMat));
     tray.position.set(0, 0.55, 0.4);
+
+    // tout sauf rouleaux et levier est immuable : matrices monde gelées
+    for (const m of [base, desk, upper, mq, strip, win, scr, tray, ...btns]) m.freezeWorldMatrix();
 
     // zone d'interaction
     const hit = B.MeshBuilder.CreateBox("slotHit", { width: 1.0, height: 2.2, depth: 1.6 }, scene);
@@ -365,6 +441,7 @@ export function buildSlots(scene, world, audio) {
   // machines par face au pas de 0,95 m en x — 3 × 2 × 9 = 54 postes.
   const { x0, z0, rows, per } = LAYOUT.slots;
   const spineMat = pbr("spineM", scene, { color: C3(0.07, 0.05, 0.05), roughness: 0.4, metallic: 0.3 });
+  EXTRA_MATS.push(spineMat);
   let i = 0;
   for (let r = 0; r < rows; r++) {
     const zRow = z0 + r * 6.8;
@@ -388,6 +465,7 @@ export function buildSlots(scene, world, audio) {
     const sill = B.MeshBuilder.CreateBox("spineSill", { width: (per - 1) * 0.95 + 0.9, height: 0.35, depth: 0.9 }, scene);
     sill.position = V3(cx, 0.175, zRow);
     sill.material = spineMat; sill.checkCollisions = true; sill.receiveShadows = true;
+    sill.freezeWorldMatrix();
   }
   // la machine libre, mise en avant, face à l'allée principale (vers la fontaine)
   const free = new SlotMachine(scene, world, audio, V3(-12.6, 0, -0.8), Math.PI / 2 - 0.15, "LE MIRAGE", 42, 99);
@@ -396,19 +474,29 @@ export function buildSlots(scene, world, audio) {
   free.hit.metadata.label = "Jouer — machine libre";
   machines.push(free);
 
-  // tabourets
+  // tabourets — trois maîtres (assise, fût, pied), 55×3 instances
   const stoolMat = pbr("stoolM", scene, { color: C3(0.35, 0.06, 0.09), roughness: 0.75 });
   const legMat = pbr("legM", scene, { color: C3(0.5, 0.5, 0.55), metallic: 1, roughness: 0.25 });
+  EXTRA_MATS.push(stoolMat, legMat);
   for (const m of machines) {
     const f = m.root.getDirection(new B.Vector3(0, 0, 1));
     const p = m.root.position.add(f.scale(1.15));
-    const seat = B.MeshBuilder.CreateCylinder("seat", { height: 0.09, diameter: 0.36, tessellation: 20 }, scene);
-    seat.position = V3(p.x, 0.66, p.z); seat.material = stoolMat;
-    const leg = B.MeshBuilder.CreateCylinder("leg", { height: 0.62, diameter: 0.06 }, scene);
-    leg.position = V3(p.x, 0.31, p.z); leg.material = legMat;
-    const foot = B.MeshBuilder.CreateCylinder("foot", { height: 0.04, diameter: 0.34, tessellation: 20 }, scene);
-    foot.position = V3(p.x, 0.03, p.z); foot.material = legMat;
-    world.shadowGens.forEach(sg => sg.addShadowCaster(seat));
+    const seat = instOf(scene, world, "stoolSeat", () => {
+      const x = B.MeshBuilder.CreateCylinder("stoolSeat", { height: 0.09, diameter: 0.36, tessellation: 20 }, scene);
+      x.material = stoolMat; return x;
+    });
+    seat.position = V3(p.x, 0.66, p.z);
+    const leg = instOf(scene, world, "stoolLeg", () => {
+      const x = B.MeshBuilder.CreateCylinder("stoolLeg", { height: 0.62, diameter: 0.06 }, scene);
+      x.material = legMat; return x;
+    }, false);
+    leg.position = V3(p.x, 0.31, p.z);
+    const foot = instOf(scene, world, "stoolFoot", () => {
+      const x = B.MeshBuilder.CreateCylinder("stoolFoot", { height: 0.04, diameter: 0.34, tessellation: 20 }, scene);
+      x.material = legMat; return x;
+    }, false);
+    foot.position = V3(p.x, 0.03, p.z);
+    seat.freezeWorldMatrix(); leg.freezeWorldMatrix(); foot.freezeWorldMatrix();
 
     // s'asseoir devant la machine
     const h = B.MeshBuilder.CreateBox("stoolHit", { width: 0.5, height: 1.1, depth: 0.5 }, scene);

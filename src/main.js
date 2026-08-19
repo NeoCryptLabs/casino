@@ -1,5 +1,6 @@
 /** LE MIRAGE — casino 3D temps réel (Babylon.js 8 + Havok). Point d'entrée. */
-import { V3, C3, fmt, wait, clamp, lightBudget } from "./util.js";
+import { V3, C3, fmt, wait, clamp, MOBILE, lightBudget } from "./util.js";
+import { createMobileHub } from "./mobile.js";
 import { buildWorld, raiseLightLimit, pruneShadowCasters, LAYOUT } from "./world.js";
 import { buildFountain } from "./fountain.js";
 import { buildSlots } from "./slots.js";
@@ -24,6 +25,10 @@ import { createDealerVoice } from "./dealer.js";
 import { createJackpot } from "./jackpot.js";
 import { buildVenues } from "./venues.js";
 import { createCashierUI } from "./cashier.js";
+import { gpuGate } from "./gpucheck.js";
+import { initPerf } from "./perf.js";
+import { freezeMat } from "./util.js";
+import { slotsStaticMats } from "./slots.js";
 
 const B = BABYLON;
 const $ = (id) => document.getElementById(id);
@@ -79,11 +84,10 @@ async function boot() {
     stencil: true, antialias: true, powerPreference: "high-performance",
     preserveDrawingBuffer: false,
   });
-  // même plafond que le défaut du réglage « Qualité de rendu » (settings.js).
-  // Le bridage à 1 sur Windows visait un GPU qu'on croyait « au tapis » : il
-  // ne l'était pas — c'est le CPU qui plafonne (soumission des draw calls),
-  // et le suréchantillonnage se paie côté GPU, où il reste de la marge.
-  engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio || 1, 1.25));
+  // même plafond que le défaut du réglage « Qualité de rendu » (settings.js) :
+  // 1.25 partout (le bridage Windows a sauté avec le correctif des blocs
+  // uniformes), 0.75 au tactile — là c'est bien le GPU de téléphone qui plie.
+  engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio || 1, MOBILE ? 0.75 : 1.25));
   // la carte et le pilote, en clair dans la console ET dans le dump dev :
   // c'est ce qui permet de diagnostiquer « lent chez lui » sans sa machine
   try {
@@ -91,6 +95,10 @@ async function boot() {
     window.__gpu = gl;
     console.info("[gpu]", gl.renderer, "|", gl.version);
   } catch { /* info indisponible : sans conséquence */ }
+
+  // Rendu logiciel ou GPU intégré détecté ? On explique au joueur comment
+  // rendre sa carte graphique au navigateur AVANT de charger 400 Mo de scène.
+  await gpuGate(engine);
 
   const scene = new B.Scene(engine);
   // LE PLAFOND DE LUMIÈRES EST POSÉ AVANT LE PREMIER CHARGEMENT : c'est le
@@ -103,6 +111,13 @@ async function boot() {
   scene.gravity = new B.Vector3(0, -0.35, 0);
   scene.useRightHandedSystem = false;
   scene.blockMaterialDirtyMechanism = false;
+  // Babylon relance par défaut un pick COMPLET de la scène à chaque
+  // pointermove (survol). Tous nos picks sont explicites (raycasts throttlés,
+  // clics) : ce travail était pur gaspillage — une souris de jeu à 1000 Hz en
+  // faisait un poste CPU de premier plan.
+  scene.skipPointerMovePicking = true;
+  // `?perf=1` : overlay draw calls / temps CPU / temps GPU (src/perf.js)
+  initPerf(scene, engine);
 
   setProgress(6, "Moteur physique…");
   await frame();
@@ -136,6 +151,18 @@ async function boot() {
   await frame();
   const world = buildWorld(scene);
   integrateWorldGlb(glbWorld, scene, world);
+  // Re-rend les cartes d'ombre FIGÉES (décor en RENDER_ONCE, réglage
+  // « Ombres : BASSES ») : à appeler quand le décor change après coup —
+  // kits GLB tardifs, objet déplacé en mode éditeur. Re-poser refreshRate
+  // ré-arme le compteur interne du RenderTargetTexture.
+  world.refreshShadows = () => {
+    for (const sg of world.shadowGens) {
+      const map = sg.getShadowMap();
+      if (map && map.refreshRate === B.RenderTargetTexture.REFRESHRATE_RENDER_ONCE) {
+        map.refreshRate = B.RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+      }
+    }
+  };
 
   setProgress(34, "Fontaine…");
   await frame();
@@ -148,7 +175,7 @@ async function boot() {
 
   setProgress(54, "Personnages…");
   await frame();
-  const people = await People.load(scene, world);
+  const people = await People.load(scene, world, layout.poses);
 
   setProgress(64, "Le bar…");
   await frame();
@@ -212,7 +239,7 @@ async function boot() {
 
   // ---- post-traitement ----
   const pipe = new B.DefaultRenderingPipeline("pipe", true, scene, [player.camera]);
-  pipe.samples = 4;                 // mesuré sans effet notable : on est CPU-limité
+  pipe.samples = MOBILE ? 2 : 4;    // CPU-limité sur bureau ; le ×4 pèse au téléphone
   pipe.fxaaEnabled = true;
   // Bloom RETENU. Il était généreux (seuil 0,82 / poids 0,34) et nappait tout
   // ce qui était un peu clair — badges, dorures, reflets du feutre — au point
@@ -286,14 +313,30 @@ async function boot() {
   // premières secondes, celles où tout compile déjà. Le résultat figé est le
   // même : seule la DERNIÈRE passe avant le gel compte.
   probe.refreshRate = 3;
-  scene.environmentTexture = probe.cubeTexture;
   scene.environmentIntensity = 1.95;
-  setTimeout(() => { probe.refreshRate = B.RenderTargetTexture.REFRESHRATE_RENDER_ONCE; }, 1500);
+  // L'ENVIRONNEMENT N'EST BRANCHÉ QU'APRÈS LA DERNIÈRE PASSE DE LA SONDE.
+  // Avant, il pointait sur probe.cubeTexture PENDANT que la sonde rendait la
+  // salle : chaque draw lisait la texture en cours d'écriture — « Feedback
+  // loop formed between Framebuffer and active Texture » en continu. Les
+  // pilotes de bureau haussent les épaules ; les GPU mobiles (tuiles) rendent
+  // NOIR. Brancher la texture après la passe finale coûte une vague de
+  // recompilation (~1,6 s après l'entrée), mais supprime la boucle partout.
+  setTimeout(() => {
+    probe.refreshRate = B.RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+    // la passe ONCE se joue à la frame suivante — on branche l'environnement
+    // deux frames plus tard, une fois la texture au repos
+    scene.onAfterRenderObservable.addOnce(() => {
+      scene.onAfterRenderObservable.addOnce(() => {
+        scene.environmentTexture = probe.cubeTexture;
+      });
+    });
+  }, 1500);
 
   // pit (2) + scène (2) + restaurant/VIP/caisse. Le plafond n'est plus deviné
   // d'après l'user-agent mais LU sur le pilote : c'est le nombre de blocs
   // uniformes disponibles qui commande, et lui seul (cf. lightBudget). Sur
-  // ANGLE/D3D11 il vaut 8, sur Metal davantage — sans jamais dépasser les 12
+  // ANGLE/D3D11 il vaut 8, sur Metal davantage — les GPU mobiles annoncent
+  // leur propre plafond de la même façon — sans jamais dépasser les 12
   // lumières que la salle sait utiliser.
   raiseLightLimit(scene, LIGHT_CAP);
   console.info("[gpu] budget lumières/matériau :", LIGHT_CAP);
@@ -424,7 +467,7 @@ async function boot() {
   const jackpot = createJackpot({ scene, audio, ui });
 
   // mode éditeur (F2) : vol libre, gizmos, sauvegarde du plan
-  const editor = createEditor({ scene, canvas, player, state, ui, audio, layout, world, bootClones, camActors });
+  const editor = createEditor({ scene, canvas, player, state, ui, audio, layout, world, bootClones, camActors, people });
 
   // --- perf : la cadence de rafraîchissement des ombres (la table d'abord,
   // le décor ensuite) est pilotée par le réglage « Ombres » — voir settings.js.
@@ -441,6 +484,7 @@ async function boot() {
   }
 
   setProgress(100, "Prêt");
+  window.__bootOk = true;          // le filet d'erreur de boot (index.html) se tait
   await frame();
 
   /* ------------------------------------------------------------- boucle */
@@ -620,6 +664,9 @@ async function boot() {
     driftCenter: V3(LAYOUT.fountain.x, 0, LAYOUT.fountain.z),
     onPlay: (first) => {
       audio.init(); audio.resume();
+      // tactile : plein écran + verrouillage paysage — ICI, dans le geste du
+      // joueur (« Entrer »), seul moment où le navigateur l'accepte
+      hub.goFullscreen();
       $("hud").hidden = false;
       state.mode = "walk";
       ui.updateCash();
@@ -652,6 +699,29 @@ async function boot() {
   // (canal wallet, le serveur borne) et pose les jetons sur le marbre du
   // guichet. Voir cashier.js ; la zone E vit dans venues.js (buildCashier).
   const cashierUI = createCashierUI({ state, ui, audio, net, chips, player, venues });
+
+  /** L'ÉCHAP, quelle que soit la main : touche au clavier, bouton ✕ au doigt. */
+  function escapeAction() {
+    if (cashierUI.isOpen()) return cashierUI.close();
+    if (chat.isOpen()) return chat.close();
+    if (state.mode === "table") leaveTable();
+    else if (state.mode === "stool") standUp();
+    else if (state.mode === "slot") leaveSlot();
+    else if (state.mode === "walk") menu.pause();
+  }
+
+  // LE HUB TACTILE (téléphones/tablettes) : joystick flottant, regard au
+  // glissement, ✕ en guise d'Échap, voile « tournez votre appareil ». Sur
+  // bureau, il ne crée rien et ne coûte rien.
+  const hub = createMobileHub({ player, state, canvas, onEscape: escapeAction });
+
+  // ...et l'invite d'interaction devient un bouton : ce que le bureau fait
+  // avec E, le pouce le fait en touchant « s'asseoir », « commander »…
+  $("prompt").addEventListener("click", () => {
+    if (!hub.active) return;
+    if (state.mode === "walk" && hovered) interact(hovered);
+    else if (state.mode === "stool") doDrink();
+  });
 
   let hovered = null, tick = 0, devStreakIdx = 0, fpsT = 0;
   scene.onBeforeRenderObservable.add(() => {
@@ -790,10 +860,7 @@ async function boot() {
       // Assis, Échap rend d'abord sa liberté au joueur — c'est ce que promet le
       // HUD. Debout, il ouvre la pause. (Souris verrouillée, le navigateur mange
       // la touche : c'est alors player.onUnlock qui prend le relais.)
-      if (state.mode === "table") leaveTable();
-      else if (state.mode === "stool") standUp();
-      else if (state.mode === "slot") leaveSlot();
-      else if (state.mode === "walk") menu.pause();
+      escapeAction();
     } else if (state.mode === "table") {
       // raccourcis blackjack
       if (e.code === "KeyH" || e.code === "KeyT") net.bj("hit");
@@ -1442,6 +1509,20 @@ async function boot() {
   // d'un coup, maintenant que le monde entier existe.
   // `net` : le pseudo persisté part au serveur dès que le registre s'applique
   settings.bind({ engine, scene, player, world, pipe, ssao, audio, heat, net });
+
+  /* GEL DU DÉCOR, second étage : les matériaux statiques (salle, fontaine,
+   * parc de machines) cessent d'être re-validés par Babylon à chaque frame.
+   * 4 s après la première image rendue : le temps que les compilations de
+   * shaders (lentes via ANGLE/D3D sur Windows) et la sonde de réflexion
+   * (figée à 1,5 s) soient passées. Le réglage « Ombres » dégèle/regèle via
+   * util.thawMats() ; l'éditeur dégèle ce qu'il attrape. On re-rend aussi les
+   * cartes d'ombre figées : les kits GLB chargés en différé y entrent. */
+  scene.onAfterRenderObservable.addOnce(() => setTimeout(() => {
+    for (const m of [...(world.staticMats || []), ...(fountain.staticMats || []), ...slotsStaticMats()]) {
+      freezeMat(m);
+    }
+    world.refreshShadows();
+  }, 4000));
 
   // La souris rendue au joueur SANS qu'on le lui ait demandé, c'est son Échap :
   // le navigateur avale la touche quand le pointeur est verrouillé, ce signal

@@ -2,10 +2,33 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>LE MIRAGE — Casino 3D</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎰</text></svg>" />
 <link rel="stylesheet" href="styles.css" />
+<script>
+/* FILET DE BOOT — toute erreur avant l'entrée en jeu s'affiche en clair : un
+   téléphone qui échoue ne doit JAMAIS laisser un écran noir muet. Script
+   classique (pas module) posé avant tout : il attrape aussi un CDN bloqué. */
+window.__bootFail = function (msg) {
+  if (window.__bootOk || document.getElementById("bootfail")) return;
+  var d = document.createElement("div");
+  d.id = "bootfail";
+  d.style.cssText = "position:fixed;left:12px;right:12px;bottom:12px;z-index:999;" +
+    "background:#2a0d0d;color:#ffd9c9;font:13px/1.5 monospace;padding:10px 14px;" +
+    "border:1px solid #a33;border-radius:8px;white-space:pre-wrap";
+  d.textContent = "Le Mirage n'a pas pu démarrer :\n" + msg;
+  if (document.body) document.body.appendChild(d);
+  else addEventListener("DOMContentLoaded", function () { document.body.appendChild(d); });
+};
+addEventListener("error", function (e) {
+  var src = e.target && e.target !== window && (e.target.src || e.target.href);
+  window.__bootFail(src ? "ressource bloquée : " + src : (e.message || "erreur inconnue"));
+}, true);
+addEventListener("unhandledrejection", function (e) {
+  window.__bootFail((e.reason && (e.reason.message || e.reason.stack)) || String(e.reason));
+});
+</script>
 <script src="https://cdn.babylonjs.com/babylon.js"></script>
 <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>

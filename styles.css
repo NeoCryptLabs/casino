@@ -16,6 +16,27 @@ html,body{width:100%;height:100%;overflow:hidden;background:#05050a;
 .barwrap{margin-top:44px;width:min(420px,70vw);height:2px;background:#3a2a12;overflow:hidden}
 #loadbar{width:0%;height:100%;background:linear-gradient(90deg,#ffcf5c,#fff3c9);box-shadow:0 0 14px #ffcf5c;transition:width .35s}
 #loadtxt{margin-top:14px;font-size:11px;letter-spacing:.3em;color:#7d6134;height:14px}
+/* Le nom de la carte graphique, lisible par n'importe qui : c'est la première
+   chose à demander quand « ça rame chez lui ». */
+#gpuname{margin-top:8px;font-size:10px;letter-spacing:.12em;color:#54431f;max-width:80vw;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- AVERTISSEMENT GPU (src/gpucheck.js) ---------- */
+#gpuwarn{position:fixed;inset:0;z-index:55;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.72);backdrop-filter:blur(4px)}
+#gpuwPanel{width:min(560px,92vw);max-height:88vh;overflow:auto;padding:26px 30px;
+  background:linear-gradient(180deg,#181008,#0c0804);border:1px solid #6b5220;border-radius:6px;
+  box-shadow:0 18px 60px rgba(0,0,0,.7)}
+#gpuwTitle{font-size:14px;letter-spacing:.22em;color:#ffcf5c;margin-bottom:14px}
+#gpuwWhy{font-size:12.5px;line-height:1.55;color:#d8c496}
+#gpuwWhy b{color:#f4e7c8;word-break:break-all}
+#gpuwSteps{margin:16px 0 4px 20px;font-size:12.5px;line-height:1.5;color:#c9b078}
+#gpuwSteps li{margin-bottom:9px}
+#gpuwSteps b{color:#ffe9b0}
+#gpuwBtns{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+#gpuwBtns .mainbtn{color:#1a1206;background:linear-gradient(180deg,#ffe9a8,#dfae4e)}
+#gpuwBtns .txtbtn{color:#e8cd8d;background:rgba(255,255,255,.05);border:1px solid rgba(255,220,140,.25)}
+#gpuwNote{margin-top:14px;font-size:10.5px;letter-spacing:.06em;color:#7d6134}
 
 /* ---------- MENU : écran-titre & pause ---------- */
 /* Au titre, la scène 3D dérive derrière le voile ; en pause, le jeu reste
@@ -603,3 +624,55 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
 /* la carte qui vient d'arriver se pose */
 @keyframes bjhdeal{from{opacity:0;transform:translateY(-7px) scale(.86)}to{opacity:1;transform:none}}
 #bjhand .bjh-c{animation:bjhdeal .22s ease-out}
+
+/* ==================== HUB TACTILE (src/mobile.js) ==================== */
+/* Tout ce bloc ne s'applique que si le hub a posé body.mobile — un bureau
+   n'en verra jamais une ligne. */
+
+/* le canvas appartient aux doigts du jeu : pas de scroll, zoom ou sélection */
+body.mobile #renderCanvas{touch-action:none}
+body.mobile{-webkit-tap-highlight-color:transparent}
+
+/* ---- paysage obligatoire : voile opaque en portrait, au-dessus de tout ---- */
+#rotate{display:none;position:fixed;inset:0;z-index:200;background:#0a0703;
+  flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;
+  font-size:17px;letter-spacing:.14em;color:#e8c477;line-height:1.7}
+#rotate small{font-size:12px;color:#c9a558;letter-spacing:.2em}
+#rotate .rot-phone{font-size:44px;animation:rotphone 1.6s ease-in-out infinite}
+@keyframes rotphone{0%,20%{transform:rotate(0)}55%,80%{transform:rotate(90deg)}100%{transform:rotate(90deg)}}
+@media (orientation: portrait){ body.mobile #rotate{display:flex} }
+
+/* ---- joystick flottant : naît sous le pouce, gauche de l'écran ---- */
+#mjoy{display:none;position:fixed;z-index:30;width:128px;height:128px;margin:-64px 0 0 -64px;
+  border-radius:50%;border:1.5px solid rgba(200,160,80,.4);background:rgba(10,7,3,.28);
+  backdrop-filter:blur(2px);pointer-events:none}
+#mjoy.on{display:block}
+#mjoyKnob{position:absolute;left:50%;top:50%;width:52px;height:52px;margin:-26px 0 0 -26px;
+  border-radius:50%;background:radial-gradient(circle at 34% 30%,#ffe9a8,#c69a3c 68%);
+  box-shadow:0 3px 14px rgba(0,0,0,.5);opacity:.88}
+
+/* ---- l'Échap du pouce : ✕ en haut à droite, dans le HUD ---- */
+#mpause{display:none;position:absolute;top:calc(14px + env(safe-area-inset-top));
+  right:calc(14px + env(safe-area-inset-right));width:46px;height:46px;z-index:40;
+  border-radius:50%;border:1px solid rgba(200,160,80,.45);background:rgba(10,7,3,.6);
+  color:#e8c477;font:inherit;font-size:19px;pointer-events:auto;backdrop-filter:blur(6px)}
+body.mobile #mpause{display:block}
+#mpause:active{transform:scale(.92);filter:brightness(1.2)}
+
+/* ---- l'invite devient un bouton : grosse pastille, sans la touche E ---- */
+body.mobile #prompt{pointer-events:auto;bottom:18%;font-size:15px;padding:16px 30px;
+  border-radius:40px;border-color:rgba(232,196,119,.75);
+  background:rgba(16,10,4,.82);box-shadow:0 0 26px rgba(255,200,80,.22)}
+body.mobile #prompt:active{transform:translateX(-50%) scale(.95)}
+body.mobile #prompt kbd{display:none}
+
+/* ---- cibles à la taille du doigt ---- */
+body.mobile .chipbtn{width:52px;height:52px;font-size:13px}
+body.mobile .mainbtn{padding:14px 22px;font-size:13px}
+body.mobile .txtbtn{padding:12px 14px}
+body.mobile .volbtn{width:40px;height:40px}
+body.mobile #crosshair{opacity:.75}
+/* le réticule au doigt n'a pas de survol : l'invite suffit à dire « touchable » */
+body.mobile #wallet{top:calc(14px + env(safe-area-inset-top));left:calc(16px + env(safe-area-inset-left))}
+/* le salon se fait discret : le log reste, la moitié de largeur suffit */
+body.mobile #chat{width:min(300px,34vw)}
