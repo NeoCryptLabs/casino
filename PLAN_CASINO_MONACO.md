@@ -91,6 +91,27 @@ laiton, marbre crème, feutre émeraude, bordeaux).
       l'addon pour d'autres familles. Commit à la demande de l'utilisateur.
 
 ## Journal
+- 19/08 (passe de performance — « ça laggue même sur une 4060 ») : le goulot
+  n'était pas le GPU mais le CPU (draw calls et travail par frame). Cinq
+  chantiers : (1) machines à sous INSTANCIÉES (slots.js, instOf) — ~810 meshes
+  → 13 maîtres partagés + instances, et chaque carte d'ombre porte 13 entrées
+  au lieu de ~750 ; (2) décor FUSIONNÉ (world.js) — lustres 33→3 meshes, 36
+  appliques→1 (les 2 de la baie de scène ne sont plus créées : absorbe les
+  surcharges sc#19/sc#23 de layout.json), 112 feuilles→1, murs 7→1, lambris
+  12→2, chapiteaux 18→1, cordons 16→3, pièces 40→1, pierre fontaine 5→1 ;
+  (3) fontaine en GPUParticleSystem (fallback CPU si WebGL1) — ~7 000 gouttes
+  ne sont plus simulées en JS ; (4) GEL — freezeWorldMatrix sur le décor
+  (l'éditeur dégèle à la sélection, applyOverrides/applyClones aussi),
+  freezeMat/thawMats (util.js) sur les matériaux statiques 4 s après la 1re
+  frame (le réglage Ombres dégèle-regèle) ; ombres BASSES : bar/fontaine/
+  machines rendues UNE fois puis figées (world.refreshShadows() ré-arme —
+  éditeur, GLB tardifs), les 3 tables restent vivantes ; (5)
+  scene.skipPointerMovePicking — Babylon re-pickait TOUTE la scène à chaque
+  pointermove (une souris 1000 Hz en faisait un poste CPU majeur). Nouveau
+  `?perf=1` (perf.js) : FPS, draw calls, temps CPU vs GPU, verdict
+  CPU-bound/GPU-bound — à faire tourner sur la machine qui rame avant
+  d'optimiser plus loin. Vérifié headless (scratchpad/smoke*.mjs) : 0 erreur
+  JS, 55 instances par maître, fusions en place, 6 GPUParticleSystem.
 - 18/08 (HUD de mise : géométrie fixe) : la barre changeait de taille après la
   mise — RÉPÉTER/ENCAISSER sortaient du flux (`hidden`) et la barre centrée se
   recompactait, les jetons glissaient sous le curseur. Corrigé : les deux
