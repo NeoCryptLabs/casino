@@ -429,6 +429,11 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
 @keyframes insblink{0%,100%{opacity:1}50%{opacity:.55}}
 /* la valeur du 21+3 garde sa case même vide : géométrie fixe (voir #bjbet) */
 #side21 b{color:#ffd76a;margin-left:4px;display:inline-block;min-width:44px;text-align:center}
+/* 21+3 ARMÉ : le prochain jeton cliqué part sur la mise annexe, pas sur la
+   mise principale — l'état doit se voir depuis le bouton */
+#side21.arm{color:#160f04;background:linear-gradient(180deg,#ffe9a8,#d8a63c);
+  box-shadow:0 0 14px rgba(255,200,90,.55)}
+#side21.arm b{color:#5c1420}
 
 /* ---------- RÉPÉTER LA MISE & CAGNOTTE DE SÉRIE ---------- */
 /* GÉOMÉTRIE FIXE. La barre #bj est centrée (translateX(-50%)) : un bouton qui
@@ -636,6 +641,13 @@ kbd{display:inline-block;min-width:22px;text-align:center;padding:2px 6px;margin
   color:#f2e7c8;text-shadow:0 0 12px rgba(255,190,80,.35)}
 #bjhand .bjh-tot.bj{color:#ffd76a;text-shadow:0 0 16px rgba(255,196,80,.8)}
 #bjhand .bjh-tot.bust{color:#ff5a45;text-shadow:0 0 14px rgba(255,60,40,.6)}
+/* ligne 21+3 : le verdict s'écrit en toutes lettres, pas en total de points */
+#bjhSide .bjh-lbl{color:#c9a558}
+#bjhSide .bjh-tot{font-size:13px;letter-spacing:.14em;min-width:96px}
+#bjhSide .bjh-tot.win{color:#ffd76a;text-shadow:0 0 16px rgba(255,196,80,.8)}
+#bjhSide .bjh-tot.lose{color:#8d6a5a}
+#bjhSide .bjh-tot.wait{color:#bda067;animation:sidePulse 1s ease-in-out infinite}
+@keyframes sidePulse{0%,100%{opacity:.45}50%{opacity:1}}
 #bjhBetRow{display:flex;align-items:center;gap:14px;padding:7px 8px 0;
   border-top:1px solid rgba(190,150,75,.18)}
 #bjhBet{font-size:15px;letter-spacing:.1em;color:#e8cd8d}

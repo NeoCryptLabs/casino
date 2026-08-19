@@ -247,7 +247,11 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
   }
 
   /* ---------------- personnages ---------------- */
-  const dealer = people.spawn(toWorld(V3(0, 0, -1.52)), root.rotation.y + Math.PI,
+  // Le croupier COLLE à la table, comme un vrai : le boudin sort à ~1,24 m du
+  // centre (RZ 1,15 ×1,007 + 0,07 de tube) et son ventre avance de ~0,11 m —
+  // à 1,36 il l'effleure. À l'ancien 1,52 il flottait 25 cm derrière le
+  // rebord, les mains loin du rack, l'air détaché de sa table.
+  const dealer = people.spawn(toWorld(V3(0, 0, -1.36)), root.rotation.y + Math.PI,
     { sex: "m", uniform: true, role: "dealer", height: 1.76 });
   const npcs = [];
   // Un seul figurant : les autres places sont laissées libres pour les joueurs
@@ -705,6 +709,8 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
   let myNetId = null;
   const seatCards = new Map();          // index de place -> nb de cartes posées
   let dealerCount = 0, holeCard = null;
+  let upLandsAt = 0;                 // quand la carte VISIBLE du croupier se pose
+  let sideTimers = [];               // mise en scène 21+3 en attente (voir t:"side")
 
   // chrono de phase : le serveur donne msLeft/msTotal, on interpole entre deux
   // photos pour que la jauge coule au lieu de sauter de trame en trame
@@ -1259,6 +1265,12 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
         pileLedger.clear();
         clearTable();
         seatCards.clear(); dealerCount = 0; holeCard = null;
+        // la mise en scène 21+3 de la manche précédente ne doit pas ressortir
+        // sur le feutre propre (verdict en retard, ligne périmée)
+        upLandsAt = 0;
+        for (const t of sideTimers) clearTimeout(t);
+        sideTimers = [];
+        ui.setSideHand?.(null);
         hideAllBadges();
         // Filet de sécurité, UNIQUEMENT sur le clear de fin de manche (la photo
         // jointe dit "betting") : tout jeton oublié sur un cercle part au
@@ -1315,6 +1327,9 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
         // la lecture des totaux attend la DERNIÈRE carte, pas la première
         settleUntil = Math.max(settleUntil, Date.now() + wait + 900);
         if (isDealer && ev.faceUp === false) holeCard = c;
+        // la carte visible du croupier : le 21+3 attend qu'elle soit POSÉE
+        // pour dévoiler sa main (voir t:"side")
+        if (isDealer && ev.faceUp !== false) upLandsAt = Date.now() + wait + 800;
       } else if (ev.t === "split") {
         // la 2e carte de la main glisse vers l'emplacement de la main séparée
         const mine = G.tableCards.filter((c) => c._seat === ev.seat && (c._h || 0) === 0);
@@ -1558,33 +1573,62 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
           }
         }
       } else if (ev.t === "side") {
-        // 21+3 : réglé dès la donne — un pic de dopamine avant même de jouer
-        if (ev.gain > 0) {
-          const st = SEATS[ev.seat];
-          if (st) floatText("+" + fmt(ev.gain) + " €",
-            toWorld(st.chipSpot).add(V3(0, 0.16, 0)), "#9fe8ff");
+        // 21+3 EN TENSION : le serveur règle à la donne, mais le VERDICT
+        // attend que la carte visible du croupier soit posée sur le feutre.
+        // Temps 1 (la pose) : la main de poker s'affiche dans le panneau,
+        // verdict en suspens. Temps 2 (~1,2 s plus tard) : le couperet — la
+        // ligne se colore, le toast dit les trois cartes, et les gros
+        // multiplicateurs déclenchent la foudre habituelle.
+        const seat = ev.seat, mine = G.seated && seat === PLAYER_SEAT;
+        const SUITS = ["♠", "♥", "♦", "♣"];
+        // vieux serveur (sans ev.cards) : on retombe sur le libellé d'avant
+        const line = ev.cards ? ev.cards.map((c) => c.rank + SUITS[c.suit]).join(" ")
+          .replace(/ (?=\S+$)/, "  +  ") : null;     // « 7♥ 8♥  +  K♠ »
+        const tag = (c) => ({ r: c.rank, s: c.suit });
+        const reveal = Math.max(0, upLandsAt - Date.now()) + 450;
+        if (mine && ev.cards) {
+          sideTimers.push(setTimeout(() => {
+            if (!G.seated) return;
+            ui.setSideHand?.({ cards: ev.cards.map(tag), label: "…", cls: "wait" });
+            audio.cardTap?.(tableVol());
+          }, reveal));
         }
-        // LE JACKPOT DU PIT emporté : brelan assorti. Confettis à la place
-        // gagnante quelle qu'elle soit — c'est l'événement de la soirée, il se
-        // voit depuis les trois tables.
-        if (ev.jackpot > 0) {
-          confettiBurst(ev.seat);
-          sparkBurst(ev.seat, 2);
-          shockwave(ev.seat, 1.4);
-        }
-        if (G.seated && ev.seat === PLAYER_SEAT) {
+        sideTimers.push(setTimeout(() => {
           if (ev.gain > 0) {
-            ui.toast(`21+3 — ${ev.result} ×${ev.mult}  +${fmt(ev.gain)} €`, "win");
-            audio.win(ev.mult >= 30);
-            if (ev.mult >= 10) voice?.say("magistral", { delay: 500, force: true });
-            heat?.gold(ev.mult >= 10);
-            shockwave(ev.seat, Math.min(1, 0.5 + ev.mult / 60));
-          } else {
-            ui.toast("21+3 perdu — " + fmt(ev.stake) + " €", "lose");
+            const st = SEATS[seat];
+            if (st) floatText("+" + fmt(ev.gain) + " €",
+              toWorld(st.chipSpot).add(V3(0, 0.16, 0)), "#9fe8ff");
           }
-        } else if (ev.gain > 0 && ev.mult >= 30) {
-          ui.toast(`La place ${ev.seat + 1} touche un ${ev.result} — ×${ev.mult} !`, "win");
-        }
+          // LE JACKPOT DU PIT emporté : brelan assorti. Confettis à la place
+          // gagnante quelle qu'elle soit — c'est l'événement de la soirée, il
+          // se voit depuis les trois tables.
+          if (ev.jackpot > 0) {
+            confettiBurst(seat);
+            sparkBurst(seat, 2);
+            shockwave(seat, 1.4);
+          }
+          if (mine) {
+            if (ev.gain > 0) {
+              if (ev.cards) ui.setSideHand?.({ cards: ev.cards.map(tag),
+                label: ev.result + " ×" + ev.mult, cls: "win" });
+              ui.toast(line
+                ? `21+3 : ${line} — ${ev.result} ×${ev.mult}, +${fmt(ev.gain)} €`
+                : `21+3 — ${ev.result} ×${ev.mult}  +${fmt(ev.gain)} €`, "win");
+              audio.win(ev.mult >= 30);
+              if (ev.mult >= 10) voice?.say("magistral", { delay: 500, force: true });
+              heat?.gold(ev.mult >= 10);
+              shockwave(seat, Math.min(1, 0.5 + ev.mult / 60));
+            } else {
+              if (ev.cards) ui.setSideHand?.({ cards: ev.cards.map(tag),
+                label: "rien", cls: "lose" });
+              ui.toast(line
+                ? `21+3 : ${line} — rien, −${fmt(ev.stake)} €`
+                : `21+3 perdu — ${fmt(ev.stake)} €`, "lose");
+            }
+          } else if (ev.gain > 0 && ev.mult >= 30) {
+            ui.toast(`La place ${seat + 1} touche un ${ev.result} — ×${ev.mult} !`, "win");
+          }
+        }, reveal + 1250));
       } else if (ev.t === "offer_insurance") {
         if (G.seated) {
           audio.ui(); ui.msg("Le croupier montre un AS…");

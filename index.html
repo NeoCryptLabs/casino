@@ -192,6 +192,13 @@ addEventListener("unhandledrejection", function (e) {
       <span class="bjh-cards"></span>
       <span class="bjh-tot">—</span>
     </div>
+    <!-- La main de poker du 21+3 (vos 2 cartes + la visible du croupier) :
+         apparaît à la donne quand la mise annexe est engagée, verdict dessus. -->
+    <div class="bjh-row" id="bjhSide" hidden>
+      <b class="bjh-lbl">21+3</b>
+      <span class="bjh-cards"></span>
+      <span class="bjh-tot side">…</span>
+    </div>
     <div id="bjhBetRow"><b class="bjh-lbl">MISE</b><span id="bjhBet">0 €</span></div>
   </div>
 

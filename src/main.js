@@ -1279,15 +1279,40 @@ async function boot() {
     }
     net.bj("buytime"); audio.ui();
   }
+  /** 21+3 « ARMÉ » : le bouton ne prélève plus d'office — il bascule le
+   *  PROCHAIN jeton cliqué vers la mise annexe, puis se désarme. Reclicquer
+   *  le bouton (ou quitter la phase de mise) désarme aussi. */
+  const sideArmed = () => $("side21").classList.contains("arm");
+  function armSide(on) {
+    $("side21").classList.toggle("arm", on);
+  }
   document.querySelectorAll(".chipbtn").forEach((b) =>
-    (b.onclick = () => tryBet(parseInt(b.dataset.v, 10))));
+    (b.onclick = () => {
+      const v = parseInt(b.dataset.v, 10);
+      if (sideArmed()) {
+        armSide(false);
+        if (bj && bj.G.phase !== "betting") {
+          audio.lose();
+          return ui.toast("Un instant — misez quand « Faites vos jeux » s'affiche", "lose");
+        }
+        net.bj("sidebet", { value: v }); audio.ui();
+        return;
+      }
+      tryBet(v);
+    }));
   $("clearBet").onclick = () => {
+    armSide(false);
     if (bj && bj.G.phase !== "betting") return ui.toast("La manche est lancée — les mises sont sur le feutre", "lose");
     net.bj("clearbet");
   };
   $("side21").onclick = () => {
-    if (bj && bj.G.phase !== "betting") return ui.toast("21+3 se joue avant la donne — attendez « Faites vos jeux »", "lose");
-    net.bj("sidebet", { value: 25 }); audio.ui();
+    if (bj && bj.G.phase !== "betting") {
+      armSide(false);
+      return ui.toast("21+3 se joue avant la donne — attendez « Faites vos jeux »", "lose");
+    }
+    armSide(!sideArmed());
+    audio.ui();
+    if (sideArmed()) ui.toast("21+3 armé — cliquez un jeton pour la mise annexe");
   };
   // RÉPÉTER : le raccourci de la boucle. Sans lui, chaque manche repart d'un
   // empilage de jetons à la main — c'est le seul vrai frein à l'enchaînement.
@@ -1344,7 +1369,7 @@ async function boot() {
     // photo serveur (plusieurs par seconde) rejouerait l'animation de pose et
     // la main clignoterait en permanence. Et comme une main ne fait que
     // GRANDIR, on n'ajoute que les cartes neuves — seules elles se posent.
-    const shown = { dealer: [], 0: [], 1: [] };
+    const shown = { dealer: [], 0: [], 1: [], side: [] };
     const keyOf = (c) => (c ? c.r + ":" + c.s : "?");
 
     function cardEl(c) {
@@ -1418,10 +1443,31 @@ async function boot() {
        */
       setHands(h) {
         $("bjhand").hidden = !h;
-        if (!h) { shown.dealer = []; shown[0] = []; shown[1] = []; return; }
+        if (!h) {
+          shown.dealer = []; shown[0] = []; shown[1] = [];
+          this.setSideHand(null);       // on quitte la table : la ligne 21+3 aussi
+          return;
+        }
         paintRow($("bjhDealer"), "dealer", h.dealer);
         paintRow($("bjhMain"), 0, h.main);
         paintRow($("bjhSplit"), 1, h.split);
+      },
+      /**
+       * La ligne 21+3 du panneau : la main de poker (2 cartes + la visible du
+       * croupier) et son verdict. `label` remplace le total ; `cls` colore le
+       * verdict (wait / win / lose). null = la ligne se range.
+       */
+      setSideHand(h) {
+        const row = $("bjhSide");
+        if (!h) {
+          row.hidden = true;
+          shown.side = [];
+          row.querySelector(".bjh-cards").textContent = "";
+          return;
+        }
+        paintRow(row, "side", { ...h, label: h.label ?? "…" });
+        const tot = row.querySelector(".bjh-tot");
+        tot.className = "bjh-tot side" + (h.cls ? " " + h.cls : "");
       },
       setPlayerVal(v) { $("playerVal").textContent = v; },
       setDealerVal(v) { $("dealerVal").textContent = v; },
@@ -1431,7 +1477,12 @@ async function boot() {
       enableDeal() { },
       // les jetons se GRISENT hors phase de mise au lieu de disparaître :
       // la barre garde la même géométrie toute la main (voir #bjbet.off)
-      showBetPanel(on) { $("bjbet").classList.toggle("off", !on); },
+      showBetPanel(on) {
+        $("bjbet").classList.toggle("off", !on);
+        // la phase de mise se ferme : un 21+3 encore armé serait un piège
+        // pour le premier jeton de la manche suivante
+        if (!on) $("side21").classList.remove("arm");
+      },
       showActions(on, opt = {}) {
         $("bjact").hidden = !on;
         $("double").disabled = !opt.canDouble;

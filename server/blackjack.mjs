@@ -42,7 +42,8 @@ const NPC_SEAT = 0;
 const houseWallet = () => ({ cash: START_CASH, tbank: 0 });
 
 // durées de phase, en millisecondes
-const T = { betting: 9000, deal: 900, turn: 12000, dealer: 650, payout: 5000, insurance: 7000 };
+// betting : 15 s — à 9 s, poser mise + 21+3 au jeton était une course
+const T = { betting: 15000, deal: 900, turn: 12000, dealer: 650, payout: 5000, insurance: 7000 };
 // table sans humain : le spectacle des figurants tourne vite, un passant voit
 // plusieurs mains par minute au lieu d'attendre des phases dimensionnées pour
 // laisser un joueur réfléchir
@@ -808,6 +809,9 @@ export class Table {
       this._push({
         t: "side", seat: s.i, stake: s.side,
         result: win ? win.name : null, mult: win ? win.mult : 0, gain, jackpot: jp,
+        // la main de poker elle-même : le client la met en scène (les deux
+        // cartes sont déjà publiques, la carte du croupier est la visible)
+        cards: [s.hand[0], s.hand[1], up],
       });
       s.side = 0;
     }
