@@ -60,9 +60,11 @@ const state = {
  * re-plante, et finit par renoncer (« a problem repeatedly occurred » sur
  * iOS). Aucune erreur JS à attraper : le processus entier disparaît. La seule
  * trace possible s'écrit À L'AVANCE : « pending » posé au départ, « ok » une
- * fois le jeu stable. Deux départs sans arrivée d'affilée = MODE ALLÉGÉ
- * (résolution réduite, sans MSAA ni bloom), et on affiche l'étape fautive —
- * le téléphone devient son propre diagnostic.
+ * fois le jeu stable. Deux départs sans arrivée d'affilée = MODE ALLÉGÉ : on
+ * retire tout ce qui coûte cher à la PREMIÈRE IMAGE — sonde de réflexion
+ * (la salle rendue ×6 faces), occlusion ambiante, halo, ombres, particules,
+ * MSAA, bloom — et la résolution tombe de moitié. L'étape où le boot est mort
+ * s'affiche sous la barre : le téléphone devient son propre diagnostic.
  */
 const SAFE = (() => {
   try {
@@ -77,8 +79,19 @@ const SAFE = (() => {
 function setProgress(p, txt) {
   $("loadbar").style.width = p + "%";
   if (txt) $("loadtxt").textContent = txt;
-  // le fil d'Ariane du plantage : la dernière étape écrite est la coupable
-  try { if (txt) localStorage.setItem("mirage.boot.step", txt); } catch { }
+  trace(txt);
+}
+
+/**
+ * Le fil d'Ariane, SANS toucher à la barre. « Prêt » était écrit à 100 % alors
+ * qu'il restait tout le câblage et surtout LA PREMIÈRE IMAGE — de loin le
+ * moment le plus cher (compilation de tous les shaders, sonde de réflexion,
+ * SSAO, halo). Un plantage « à Prêt » ne désignait donc rien. Ces jalons-là
+ * découpent l'après-100 %, jusqu'à la première frame réellement présentée.
+ */
+function trace(step) {
+  if (!step) return;
+  try { localStorage.setItem("mirage.boot.step", step); } catch { }
 }
 /**
  * UNE FRAME RENDUE — ou, à défaut, un délai.
@@ -121,6 +134,14 @@ async function boot() {
   // uniformes), 0.75 au tactile — là c'est bien le GPU de téléphone qui plie.
   engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio || 1,
     SAFE ? (MOBILE ? 0.5 : 1) : MOBILE ? 0.75 : 1.25));
+  // PERTE DU CONTEXTE WEBGL : le pilote a rendu les armes (mémoire vidéo
+  // épuisée, watchdog du système). Le processus, lui, survit — on peut donc
+  // l'écrire. Sans ça ce cas se confondait avec la mort brutale de l'onglet.
+  engine.onContextLostObservable?.add(() => {
+    trace("contexte GPU perdu");
+    console.error("[boot] contexte WebGL perdu");
+  });
+
   // la carte et le pilote, en clair dans la console ET dans le dump dev :
   // c'est ce qui permet de diagnostiquer « lent chez lui » sans sa machine
   try {
@@ -320,52 +341,69 @@ async function boot() {
   pipe.depthOfFieldEnabled = false;
   pipe.depthOfFieldBlurLevel = B.DepthOfFieldEffectBlurLevel.Medium;
 
-  // occlusion ambiante
+  // Occlusion ambiante. Sautée en mode allégé : ses cibles de rendu et sa
+  // passe de flou coûteuse s'ajoutaient à la tempête de compilation de la
+  // première image, exactement là où le téléphone rendait l'âme.
   let ssao = null;
-  try {
-    ssao = new B.SSAO2RenderingPipeline("ssao", scene, { ssaoRatio: 0.6, blurRatio: 1 }, [player.camera]);
-    ssao.totalStrength = 1.05;
-    ssao.radius = 0.9;
-    ssao.expensiveBlur = true;
-    ssao.samples = 12;
-    ssao.maxZ = 40;
-  } catch (e) { console.warn("SSAO2 non supporté", e); }
+  if (SAFE) {
+    console.info("[boot] mode allégé : SSAO, sonde de réflexion et halo sautés");
+  } else {
+    try {
+      ssao = new B.SSAO2RenderingPipeline("ssao", scene, { ssaoRatio: 0.6, blurRatio: 1 }, [player.camera]);
+      ssao.totalStrength = 1.05;
+      ssao.radius = 0.9;
+      ssao.expensiveBlur = true;
+      ssao.samples = 12;
+      ssao.maxZ = 40;
+    } catch (e) { console.warn("SSAO2 non supporté", e); }
+  }
+
+  // 1,95 transformait chaque surface un peu lisse en miroir de la salle
+  // (sol, marbres, dorures) — on garde un reflet discret, pas une vitrine
+  scene.environmentIntensity = 1.15;
 
   // --- réflexions : une sonde rendue depuis l'intérieur du casino remplace
   // l'environnement HDR par défaut (qui est un extérieur : le sol de marbre
   // reflétait un ciel). Rendue quelques frames puis figée.
-  const probe = new B.ReflectionProbe("probe", 256, scene, true);
-  probe.position = V3(LAYOUT.fountain.x, 3.2, LAYOUT.fountain.z);
-  probe.renderList.push(
-    ...scene.meshes.filter((m) =>
-      m.isVisible && m.isEnabled() && m.material &&
-      !/^(card|chip|sheet|waterSurf|w2|w3)/.test(m.name))
-  );
-  // une frame sur trois pendant l'échauffement : chaque rendu de sonde, c'est
-  // la salle entière ×6 faces — à cadence 1, elle triplait le coût des
-  // premières secondes, celles où tout compile déjà. Le résultat figé est le
-  // même : seule la DERNIÈRE passe avant le gel compte.
-  probe.refreshRate = 3;
-  // 1,95 transformait chaque surface un peu lisse en miroir de la salle
-  // (sol, marbres, dorures) — on garde un reflet discret, pas une vitrine
-  scene.environmentIntensity = 1.15;
-  // L'ENVIRONNEMENT N'EST BRANCHÉ QU'APRÈS LA DERNIÈRE PASSE DE LA SONDE.
-  // Avant, il pointait sur probe.cubeTexture PENDANT que la sonde rendait la
-  // salle : chaque draw lisait la texture en cours d'écriture — « Feedback
-  // loop formed between Framebuffer and active Texture » en continu. Les
-  // pilotes de bureau haussent les épaules ; les GPU mobiles (tuiles) rendent
-  // NOIR. Brancher la texture après la passe finale coûte une vague de
-  // recompilation (~1,6 s après l'entrée), mais supprime la boucle partout.
-  setTimeout(() => {
-    probe.refreshRate = B.RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
-    // la passe ONCE se joue à la frame suivante — on branche l'environnement
-    // deux frames plus tard, une fois la texture au repos
-    scene.onAfterRenderObservable.addOnce(() => {
+  //
+  // SAUTÉE EN MODE ALLÉGÉ : c'est LE poste le plus cher des premières
+  // secondes — la salle entière rendue ×6 faces, une frame sur trois, juste
+  // au moment où tous les shaders compilent déjà. Un GPU de téléphone y passe
+  // plusieurs secondes sur une seule frame, et le système tue l'onglet pour
+  // « ne répond plus ». Sans elle, le marbre reflète le ciel de l'HDR par
+  // défaut : moins joli, mais le casino s'ouvre.
+  if (!SAFE) {
+    const probe = new B.ReflectionProbe("probe", 256, scene, true);
+    probe.position = V3(LAYOUT.fountain.x, 3.2, LAYOUT.fountain.z);
+    probe.renderList.push(
+      ...scene.meshes.filter((m) =>
+        m.isVisible && m.isEnabled() && m.material &&
+        !/^(card|chip|sheet|waterSurf|w2|w3)/.test(m.name))
+    );
+    // une frame sur trois pendant l'échauffement : chaque rendu de sonde,
+    // c'est la salle entière ×6 faces — à cadence 1, elle triplait le coût
+    // des premières secondes. Le résultat figé est le même : seule la
+    // DERNIÈRE passe avant le gel compte.
+    probe.refreshRate = 3;
+    // L'ENVIRONNEMENT N'EST BRANCHÉ QU'APRÈS LA DERNIÈRE PASSE DE LA SONDE.
+    // Avant, il pointait sur probe.cubeTexture PENDANT que la sonde rendait
+    // la salle : chaque draw lisait la texture en cours d'écriture —
+    // « Feedback loop formed between Framebuffer and active Texture » en
+    // continu. Les pilotes de bureau haussent les épaules ; les GPU mobiles
+    // (tuiles) rendent NOIR. Brancher la texture après la passe finale coûte
+    // une vague de recompilation (~1,6 s après l'entrée), mais supprime la
+    // boucle partout.
+    setTimeout(() => {
+      probe.refreshRate = B.RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+      // la passe ONCE se joue à la frame suivante — on branche
+      // l'environnement deux frames plus tard, une fois la texture au repos
       scene.onAfterRenderObservable.addOnce(() => {
-        scene.environmentTexture = probe.cubeTexture;
+        scene.onAfterRenderObservable.addOnce(() => {
+          scene.environmentTexture = probe.cubeTexture;
+        });
       });
-    });
-  }, 1500);
+    }, 1500);
+  }
 
   // pit (2) + scène (2) + restaurant/VIP/caisse. Le plafond n'est plus deviné
   // d'après l'user-agent mais LU sur le pilote : c'est le nombre de blocs
@@ -518,14 +556,35 @@ async function boot() {
     scene.onNewMeshAddedObservable.add((m) => { m.cullingStrategy = cs; });
   }
 
+  if (SAFE) {
+    // le halo est une passe plein écran de plus, avec un flou à grand noyau
+    try { world.glow?.dispose(); } catch { }
+    // les particules de la fontaine : trois systèmes + une cible de rendu
+    // rafraîchie à chaque frame, pour de l'eau qu'on ne regarde pas en
+    // survivant à un plantage
+    // `jets` est un TABLEAU de systèmes, splash et mist sont uniques
+    for (const ps of [...(fountain.jets || []), fountain.splash, fountain.mist]) {
+      try { ps?.stop?.(); } catch { }
+    }
+  }
+
   setProgress(100, "Prêt");
   window.__bootOk = true;          // le filet d'erreur de boot (index.html) se tait
-  setTimeout(() => {
+
+  /* L'ARRIVÉE EST DÉCLARÉE. Deux façons d'y parvenir :
+   *  - 15 s de jeu tenues (le plantage tardif, GPU qui lâche après coup, doit
+   *    encore pouvoir compter) ;
+   *  - le joueur ferme LUI-MÊME l'app avant ces 15 s. Fermer volontairement
+   *    n'est pas planter : sans ce cas, deux visites écourtées suffisaient à
+   *    déclencher le mode allégé et à dégrader l'image sans raison. */
+  const arrive = () => {
     try {
       localStorage.setItem("mirage.boot", "ok");
       localStorage.removeItem("mirage.boot.crashes");
     } catch { }
-  }, 15000);
+  };
+  setTimeout(arrive, 15000);
+  addEventListener("pagehide", arrive);
   await frame();
 
   /* ------------------------------------------------------------- boucle */
@@ -534,6 +593,7 @@ async function boot() {
 
   // Le salon existe AVANT la liaison : sans serveur il reste utilisable et
   // répond « hors ligne » plutôt que d'avaler ce qu'on tape.
+  trace("câblage réseau");
   const chat = createChat({ player, audio });
   // les piques du croupier partent dans le salon — créé après la voix
   dealerVoice.setChat(chat);
@@ -883,6 +943,11 @@ async function boot() {
   });
 
   // le hit-stop est un saut de PRÉSENTATION : la boucle tourne, l'image gèle
+  trace("première image");
+  // LA PREMIÈRE IMAGE PRÉSENTÉE est le vrai bout du tunnel : c'est elle qui
+  // paie la compilation de tous les shaders d'un coup. Si le téléphone meurt
+  // ici, la trace le dira au lancement suivant.
+  scene.onAfterRenderObservable.addOnce(() => trace("rendu en cours"));
   engine.runRenderLoop(() => { if (!cinema.frozen()) scene.render(); });
   addEventListener("resize", () => engine.resize());
 
@@ -1646,6 +1711,17 @@ async function boot() {
     engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio || 1, MOBILE ? 0.5 : 1));
     pipe.bloomEnabled = false;
     pipe.samples = 1;
+    pipe.grainEnabled = false;
+    pipe.chromaticAberrationEnabled = false;
+    pipe.lensFlareEnabled = false;
+    // Les cartes d'ombre sont autant de rendus de la salle par frame. On
+    // éteint À LA MAIN plutôt que par settings.set() : ce dernier PERSISTE le
+    // choix, et le joueur se retrouverait sans ombres pour toujours après un
+    // simple plantage. Le mode allégé est un filet, pas une préférence.
+    for (const sg of world.shadowGens) {
+      const light = sg.getLight?.();
+      if (light) light.shadowEnabled = false;
+    }
   }
 
   /* GEL DU DÉCOR, second étage : les matériaux statiques (salle, fontaine,
