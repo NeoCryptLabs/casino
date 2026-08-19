@@ -24,7 +24,7 @@ const B = () => BABYLON;   // accès paresseux : les fonctions pures n'y touchen
 
 /* ------------------------------------------------------------------ réseau */
 
-const EMPTY = () => ({ anchors: {}, overrides: {}, clones: [], cameras: {}, poses: {} });
+const EMPTY = () => ({ anchors: {}, overrides: {}, clones: [], cameras: {}, poses: {}, npcs: {} });
 
 export async function fetchLayout() {
   try {
@@ -39,6 +39,8 @@ export async function fetchLayout() {
       cameras: j.cameras && typeof j.cameras === "object" ? j.cameras : {},
       // poses de figurants (mode pose de l'éditeur) — voir pose.js / npc.js
       poses: j.poses && typeof j.poses === "object" ? j.poses : {},
+      // placements de figurants (gizmo racine du mode pose) — voir npc.js
+      npcs: j.npcs && typeof j.npcs === "object" ? j.npcs : {},
     };
   } catch {
     // pas de serveur (jeu ouvert en statique) : on joue avec le plan par défaut

@@ -91,6 +91,31 @@ laiton, marbre crème, feutre émeraude, bordeaux).
       l'addon pour d'autres familles. Commit à la demande de l'utilisateur.
 
 ## Journal
+- 19/08 (« encaisser la brûlure ne marche plus ») : ce n'était pas la cagnotte —
+  c'était L'ASSISE. À la relance du serveur (13 h 33, session PWA) le client
+  restait assis EN FAÇADE : le serveur neuf n'avait jamais reçu de « sit »
+  (net.bj jette sans bruit hors connexion, onopen ne ré-émettait que
+  pose/nom/spots), donc mises, série, cagnotte et ENCAISSER partaient dans le
+  vide, sans un mot. Corrigés : net.js `onReconnect` (la chaise se re-déclare
+  à chaque (re)connexion) + auto-guérison dans main.js `onTable` (tant
+  qu'aucune place de la photo ne porte net.id, on re-réclame la chaise toutes
+  les 3 s — nécessaire car le premier re-sit est refusé tant que le FANTÔME
+  orphelin de l'ancienne session tient la place ; si un AUTRE l'a prise, on
+  l'annonce et on n'insiste pas). Côté serveur : `shutdown()` encaisse les
+  cagnottes vivantes dans les profils avant dépôt (un redémarrage les mangeait
+  en silence). Reproduit et validé au bot Playwright (scratchpad
+  bank-test2.cjs) ; le serveur en cours doit être relancé (à froid) pour
+  activer bankLivePots et la clé `npcs` de handleLayout.
+- 19/08 (gizmo racine des PNJ) : en mode pose, tant qu'aucun os n'est
+  sélectionné, le figurant porte flèches de position + anneau de lacet
+  (pose.js : PositionGizmo + PlaneRotationGizmo, quaternion rabattu en
+  rotation.y au relâcher). Persistance : layout.npcs sous `placeKey` (npc.js,
+  clé = poste + point de spawn d'origine, rejouée au spawn par-dessus la
+  position de construction ; déplacer une ancre invalide la retouche, c'est
+  voulu). fetchLayout/EMPTY (layout.js), People.load(..., placements) et
+  `people`/`net` exposés dans __game (main.js), clé `npcs` conservée par
+  handleLayout (server.mjs). Vérifié headless : gizmo visible et actif,
+  placement injecté rejoué au spawn.
 - 19/08 (figurants simplifiés) : « pour les clients, utiliser les pantins de
   Mixamo (comme joueur), bien plus simple » — les clients de la salle
   instancient désormais le conteneur de `player.glb` (kit `tint` distinct du

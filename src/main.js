@@ -175,7 +175,7 @@ async function boot() {
 
   setProgress(54, "Personnages…");
   await frame();
-  const people = await People.load(scene, world, layout.poses);
+  const people = await People.load(scene, world, layout.poses, layout.npcs);
 
   setProgress(64, "Le bar…");
   await frame();
@@ -313,7 +313,9 @@ async function boot() {
   // premières secondes, celles où tout compile déjà. Le résultat figé est le
   // même : seule la DERNIÈRE passe avant le gel compte.
   probe.refreshRate = 3;
-  scene.environmentIntensity = 1.95;
+  // 1,95 transformait chaque surface un peu lisse en miroir de la salle
+  // (sol, marbres, dorures) — on garde un reflet discret, pas une vitrine
+  scene.environmentIntensity = 1.15;
   // L'ENVIRONNEMENT N'EST BRANCHÉ QU'APRÈS LA DERNIÈRE PASSE DE LA SONDE.
   // Avant, il pointait sur probe.cubeTexture PENDANT que la sonde rendait la
   // salle : chaque draw lisait la texture en cours d'écriture — « Feedback
@@ -499,6 +501,8 @@ async function boot() {
 
   // Multijoueur : purement optionnel. Sans serveur WebSocket en face, `Net`
   // retente en arrière-plan et le jeu tourne exactement comme avant.
+  // cadence de re-réclamation de la chaise (voir onTable : auto-guérison)
+  const resit = { at: 0, warned: false };
   const net = new Net({
     scene, people, player,
     // position réelle de chaque place assise, pour poser l'avatar sur la chaise
@@ -515,7 +519,44 @@ async function boot() {
       return null;
     },
     // chaque table serveur nourrit sa jumelle de mise en scène
-    onTable: (st, evs, tableIdx) => bjs[tableIdx]?.applyServer(st, evs, net.id),
+    onTable: (st, evs, tableIdx) => {
+      bjs[tableIdx]?.applyServer(st, evs, net.id);
+      /**
+       * AUTO-GUÉRISON DE L'ASSISE. Je me crois assis (state.spot) mais aucune
+       * place de la photo ne porte mon id réseau : serveur relancé, coupure —
+       * ou ma place encore tenue par le FANTÔME orphelin de mon ancienne
+       * session, qui ne la rend qu'à la fin de sa main (le premier « sit » de
+       * la reconnexion est alors refusé en silence). On re-réclame la chaise
+       * toutes les 3 s jusqu'à réussite ; sans ça, mises, C et ENCAISSER
+       * partaient dans le vide pour toujours.
+       */
+      const parts = (state.spot || "").split(":");
+      if (state.mode !== "table" || parts[0] !== "blackjack" || Number(parts[1]) !== tableIdx) return;
+      if (net.id == null || st.seats.some((s) => s.pid === net.id)) { resit.warned = false; return; }
+      const seat = Number(parts[2]);
+      const sf = st.seats[seat];
+      if (sf && sf.pid && sf.pid !== net.id) {
+        // prise par QUELQU'UN D'AUTRE pendant la coupure : insister mentirait
+        if (!resit.warned) { resit.warned = true; ui.toast("Votre place a été reprise pendant la coupure", "lose"); }
+        return;
+      }
+      const now = Date.now();
+      if (now - resit.at > 3000) { resit.at = now; net.bj("sit", { seat }); }
+    },
+    /**
+     * LIAISON RETROUVÉE (coupure réseau, serveur relancé) : le serveur neuf ne
+     * sait rien de ma chaise — je la re-déclare depuis `state.spot`, la seule
+     * mémoire client de l'assise. Sans ça le joueur restait assis en façade :
+     * le serveur ignorait ses mises en silence, la série ne montait plus et
+     * ENCAISSER (la cagnotte de série) semblait mort — c'était exactement ça.
+     */
+    onReconnect: () => {
+      const parts = (state.spot || "").split(":");
+      if (state.mode === "table" && parts[0] === "blackjack" && parts.length === 3) {
+        net.tableIdx = Number(parts[1]);
+        net.bj("sit", { seat: Number(parts[2]) });
+      }
+    },
     // le concert appartient à la salle : le serveur dit la phase, on la joue
     onConcert: (st) => concert.applyServer(st),
     /**
@@ -1497,7 +1538,7 @@ async function boot() {
   });
   window.__game = {
     scene, engine, state, player, bjs, get bj() { return bj; },
-    chips, cards, bar, machines, fountain, world, pipe, ui, heat, editor, layout, camActors, stage, concert, venues,
+    chips, cards, bar, machines, fountain, world, pipe, ui, heat, editor, layout, camActors, stage, concert, venues, people, net,
     menu, settings, cashierUI,
     sitTable, leaveTable, enterSlot, leaveSlot, doDrink, sitStool, standUp,
   };

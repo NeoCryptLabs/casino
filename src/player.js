@@ -103,7 +103,7 @@ export class Player {
       // AXE VERTICAL INVERSÉ. Babylon ne sait inverser que les DEUX axes à la
       // fois (camera.invertRotation) : on retranche donc deux fois l'apport
       // vertical de la souris — le cumul net est exactement son opposé.
-      if (this.invertY && this.locked && !this.seated && !this.frozen) {
+      if (this.invertY && this.locked && !this.seated && (!this.frozen || this.editing)) {
         cam.cameraRotation.x -= (2 * (e.movementY || 0)) / cam.angularSensibility;
       }
     });

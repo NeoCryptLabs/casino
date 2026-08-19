@@ -43,7 +43,10 @@ html,body{width:100%;height:100%;overflow:hidden;background:#05050a;
    dessous, flouté. Un seul calque, deux ambiances. */
 #menu{position:fixed;inset:0;z-index:60;opacity:0;transition:opacity .32s ease;
   display:grid;grid-template-rows:auto 1fr auto;
-  padding:clamp(26px,5vh,60px) clamp(28px,7vw,104px);
+  padding:calc(clamp(26px,5vh,60px) + env(safe-area-inset-top))
+          calc(clamp(28px,7vw,104px) + env(safe-area-inset-right))
+          calc(clamp(26px,5vh,60px) + env(safe-area-inset-bottom))
+          calc(clamp(28px,7vw,104px) + env(safe-area-inset-left));
   backdrop-filter:blur(2px)}
 #menu.on{opacity:1}
 #menu.paused{backdrop-filter:blur(13px) saturate(.75)}
@@ -57,9 +60,39 @@ html,body{width:100%;height:100%;overflow:hidden;background:#05050a;
 #mnHead .logo{font-size:clamp(30px,5.4vw,62px)}
 #menu.paused #mnHead .logo{font-size:clamp(22px,3.6vw,42px)}
 #mnHead .sub{margin-top:.5em}
-#mnPage{align-self:center;width:100%;max-width:680px;padding:clamp(18px,4vh,42px) 0}
+/* min-height:0 + overflow : dans une rangée 1fr de grille, sans ça la page
+   déborde de l'écran au lieu de défiler — sur un téléphone en PAYSAGE le
+   champ du nom et l'ambiance passaient sous le bord, inatteignables. */
+#mnPage{align-self:center;width:100%;max-width:680px;padding:clamp(18px,4vh,42px) 0;
+  min-height:0;max-height:100%;overflow-y:auto;overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+#mnPage::-webkit-scrollbar{display:none}
 #mnFoot{font-size:10px;letter-spacing:.24em;color:#6b5228}
 #mnFoot b{color:#c49a49}
+
+/* Téléphone en PAYSAGE : ~320-450 px de haut une fois la barre du navigateur
+   posée. Tout se compacte — le défilement de #mnPage reste le filet, mais la
+   racine du menu (navigation + nom + ambiance) doit tenir SANS défiler. */
+@media (max-height: 520px){
+  #menu{padding:calc(10px + env(safe-area-inset-top))
+                calc(clamp(20px,5vw,56px) + env(safe-area-inset-right))
+                calc(8px + env(safe-area-inset-bottom))
+                calc(clamp(20px,5vw,56px) + env(safe-area-inset-left))}
+  #mnHead .logo,#menu.paused #mnHead .logo{font-size:clamp(18px,5.5vh,28px)}
+  #mnHead .sub{margin-top:.15em;font-size:9px}
+  #mnPage{padding:6px 0}
+  .mn-nav{gap:0}
+  .mn-item{padding:5px 0;font-size:clamp(12px,3.4vh,15px);gap:12px}
+  .mn-item.mn-small{margin-top:6px;font-size:10px}
+  .mn-name{margin-top:4px;padding:2px 0}
+  .mn-name input{font-size:13px}
+  .mn-amb{margin-top:8px;padding:5px 10px}
+  .mn-amb .mn-row{padding:4px 8px}
+  .mn-rows,.mn-doc{padding:10px 12px}
+  .mn-row{padding:6px 10px}
+  .mn-tabs{margin-bottom:8px;padding-bottom:7px}
+  #mnFoot{font-size:8px;letter-spacing:.18em}
+}
 
 .mn-nav{display:flex;flex-direction:column;align-items:flex-start;gap:2px}
 .mn-item{display:flex;align-items:center;gap:16px;padding:11px 0;cursor:pointer;

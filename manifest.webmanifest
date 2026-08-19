@@ -1,0 +1,17 @@
+{
+  "name": "Le Mirage — Casino & Lounge",
+  "short_name": "Le Mirage",
+  "description": "Casino 3D multijoueur : blackjack, machines à sous, bar et concert.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0a0703",
+  "theme_color": "#0a0703",
+  "icons": [
+    { "src": "assets/pwa/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "assets/pwa/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "assets/pwa/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

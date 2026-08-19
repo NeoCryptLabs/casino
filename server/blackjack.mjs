@@ -292,11 +292,19 @@ export class Table {
 
   /* ------------------------------------------------------------ état */
 
-  /** Photo complète. Le sabot n'est jamais exposé : un client le lirait. */
+  /**
+   * Photo complète. Le CONTENU du sabot n'est jamais exposé — un client le
+   * lirait — mais son NIVEAU l'est : à une vraie table, la profondeur du paquet
+   * est sous les yeux de tout le monde, et c'est elle que le sabot du client
+   * doit montrer. Sans ce chiffre, le paquet visible dérivait (le client ne
+   * matérialise pas toutes les cartes tirées) et la carte de coupe ne sortait
+   * jamais.
+   */
   state() {
     return {
       round: this.round,
       phase: this.phase,
+      shoeLeft: this.shoe.length,
       // la réserve de temps s'achète : son prix et sa taille viennent d'ici,
       // pour qu'un bouton client n'affiche jamais un tarif que la table refuse
       tbankPrice: TIME_BANK_PRICE,

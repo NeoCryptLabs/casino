@@ -35,6 +35,7 @@ const MIME = {
   ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
   ".glb": "model/gltf-binary",
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -146,6 +147,8 @@ async function handleLayout(req, res) {
         cameras: j.cameras && typeof j.cameras === "object" ? j.cameras : {},
         // poses de figurants (mode pose de l'éditeur, voir src/pose.js)
         poses: j.poses && typeof j.poses === "object" ? j.poses : {},
+        // placements de figurants (gizmo racine du mode pose, voir src/npc.js)
+        npcs: j.npcs && typeof j.npcs === "object" ? j.npcs : {},
       };
       await writeFile(LAYOUT_FILE, JSON.stringify(clean, null, 2) + "\n");
       res.writeHead(200, { "content-type": "application/json" });
@@ -176,6 +179,10 @@ async function handleLayout(req, res) {
  * `spot` identifie la place assise revendiquée ; null = debout.
  */
 const players = new Map();
+
+// Posé par createWss (les tables y vivent) ; consommé par shutdown() pour
+// encaisser les cagnottes de série encore en jeu avant le dépôt des profils.
+let bankLivePots = () => { };
 let nextId = 1;
 
 /** Les profils persistants, relus une fois pour toutes au démarrage. */
@@ -246,6 +253,24 @@ function attachRealtime(server) {
   const tables = [0, 1, 2].map((k) =>
     new Table((msg) => broadcast(wss, { ...msg, table: k })));
   tables.forEach((t, k) => { t.tag = "T" + k; });   // étiquette de journal
+
+  // À L'ARRÊT, les cagnottes de série encore sur les tables sont ENCAISSÉES
+  // dans le portefeuille (donc le profil) de leur joueur, avant le dépôt des
+  // profils. La règle de _release — « la cagnotte n'est jamais confisquée » —
+  // vaut aussi quand c'est le serveur qui s'en va : sans ça, un redémarrage
+  // mangeait en silence la cagnotte de quiconque était assis.
+  bankLivePots = () => {
+    for (const t of tables) {
+      for (const s of t.seats) {
+        if (s.playerId && s.pot > 0) {
+          console.log(`[bj ${t.tag}] arrêt : cagnotte de ${s.name} encaissée (${s.pot} €)`);
+          s.wallet.back = (s.wallet.back || 0) + s.pot;
+          s.wallet.cash += s.pot;
+          s.pot = 0;
+        }
+      }
+    }
+  };
 
   // LE JACKPOT DU PIT : une seule cagnotte pour les trois tables. Elle monte à
   // chaque mise annexe, d'où qu'elle vienne, et s'annonce à toute la salle.
@@ -528,6 +553,7 @@ function attachRealtime(server) {
 /** Dernier dépôt avant de rendre la main. */
 async function shutdown(sig) {
   console.log(`\n[${sig}] arrêt — dépôt des profils…`);
+  bankLivePots();      // les cagnottes de série rejoignent les portefeuilles
   for (const pl of players.values()) syncProfile(pl);
   await store.flush({ force: true });
   process.exit(0);

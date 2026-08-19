@@ -169,7 +169,7 @@ async function tryLoad(scene, url) {
 }
 
 export class People {
-  static async load(scene, world, poses = {}) {
+  static async load(scene, world, poses = {}, placements = {}) {
     const kits = [];
     // TOUT PART EN MÊME TEMPS. Chargés l'un après l'autre, ces cinq .glb
     // (~35 Mo) additionnaient leurs allers-retours réseau — pour un joueur
@@ -193,7 +193,11 @@ export class People {
     // et elle rattrape un déploiement où player.glb manquerait.
     if (avatar) {
       kits.push({ url: "assets/player.glb", container: avatar, male: true, avatar: true });
-      kits.push({ url: "assets/player.glb", container: avatar, male: true, tint: true });
+      // le Xbot regarde vers +Z à yaw 0 — c'est la convention CAMÉRA, celle
+      // que net.js applique brute aux joueurs distants. Les clients, eux,
+      // sont placés en convention -Z comme tout le code : demi-tour par kit,
+      // exactement ce que faisait la normalisation des anciens kits RPM.
+      kits.push({ url: "assets/player.glb", container: avatar, male: true, tint: true, flip: Math.PI });
       kits[0].hidden = true;
     } else console.info("[casino] assets/player.glb absent : avatars sans animation, clients Michelle");
 
@@ -218,6 +222,7 @@ export class People {
     }
     const people = new People(scene, world, kits);
     people.poses = poses || {};
+    people.placements = placements || {};
     await people._prepareUniform();
     return people;
   }
@@ -371,6 +376,20 @@ export class People {
     npc.poseKey = (o.poseId || o.role || ("client:" + (o.seated ? "assis" : "debout"))) + "@" + kitBase;
     const saved = this.poses && this.poses[npc.poseKey];
     if (saved) npc.applyPose(saved);
+    // Placement retouché à l'éditeur (gizmo racine du mode pose, voir pose.js),
+    // rejoué par-dessus la position de construction. La clé retient le POINT DE
+    // SPAWN d'origine : déplacer l'ancre d'un ensemble rebâtit ses figurants
+    // ailleurs, la clé change et la retouche tombe — c'est voulu, elle était
+    // écrite dans l'ancien monde.
+    npc.placeKey = (o.poseId || o.role || "client")
+      + "@" + pos.x.toFixed(2) + "," + pos.z.toFixed(2);
+    const at = this.placements && this.placements[npc.placeKey];
+    if (at) {
+      if (Array.isArray(at.p)) root.position.set(at.p[0], at.p[1], at.p[2]);
+      if (Number.isFinite(at.ry)) { root.rotationQuaternion = null; root.rotation.set(0, at.ry, 0); }
+      npc._sync();
+      npc._snapshot();
+    }
     this.list.push(npc);
     return npc;
   }

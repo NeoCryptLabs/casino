@@ -5,6 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>LE MIRAGE — Casino 3D</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎰</text></svg>" />
+<!-- PWA : installable depuis le navigateur pour un VRAI plein écran (plus de
+     barre d'adresse en paysage). Android : Chrome propose « Installer »
+     (HTTPS ou localhost requis). iPhone/iPad : Partager → « Sur l'écran
+     d'accueil » — les balises apple-* suffisent, même sans HTTPS. -->
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#0a0703" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Le Mirage" />
+<link rel="apple-touch-icon" href="assets/pwa/icon-180.png" />
 <link rel="stylesheet" href="styles.css" />
 <script>
 /* FILET DE BOOT — toute erreur avant l'entrée en jeu s'affiche en clair : un
@@ -262,5 +273,15 @@ addEventListener("unhandledrejection", function (e) {
 </div>
 
 <script type="module" src="./src/main.js"></script>
+<script>
+/* Enregistrement du service worker : requis pour l'installation PWA sur
+   Android. `isSecureContext` écarte l'accès par IP locale en HTTP (le SW y
+   est interdit) — le jeu marche pareil, seule l'installation Chrome manque. */
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  addEventListener("load", function () {
+    navigator.serviceWorker.register("sw.js").catch(function () { /* sans conséquence */ });
+  });
+}
+</script>
 </body>
 </html>

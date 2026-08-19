@@ -538,6 +538,9 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
 
   scene.onPointerObservable.add((info) => {
     if (!active || info.type !== B.PointerEventTypes.POINTERTAP) return;
+    // le clic droit REGARDE (pointer lock ci-dessous) : souris verrouillée,
+    // Babylon ne voit aucun mouvement et prendrait chaque relâché pour un tap
+    if (info.event && info.event.button === 2) return;
     // mode pose : les clics lui appartiennent (pastilles d'os, changement de
     // figurant, sortie) tant qu'il est actif
     if (poseMode && poseMode.active) { poseMode.tap(npcFor); return; }
@@ -570,6 +573,31 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
     }
     select(hit.pickedMesh);
   });
+
+  /* Regard au CLIC DROIT maintenu : la souris est CAPTURÉE (pointer lock),
+     comme en jeu — fini les allers-retours au bord de l'écran pour faire un
+     tour complet. Babylon bascule de lui-même sur movementX/Y quand le
+     pointeur est verrouillé : il suffit de verrouiller à l'appui et de
+     rendre la souris au relâché (elle réapparaît là où on l'avait prise).
+     On passe par lock()/unlock() du joueur et non par les appels bruts du
+     navigateur : unlock() marque le déverrouillage comme VOULU — sinon il
+     passerait pour l'Échap du joueur — et annule le rattrapage à 500 ms que
+     lock() arme quand Chrome refuse un verrouillage trop tôt (sans ça, un
+     clic droit bref reprendrait la souris après coup). */
+  let rightLook = false;
+  canvas.addEventListener("pointerdown", (e) => {
+    if (!active || e.button !== 2) return;
+    rightLook = true;
+    player.lock();
+  });
+  addEventListener("pointerup", (e) => {
+    if (!rightLook || e.button !== 2) return;
+    rightLook = false;
+    // Échap a pu déjà rendre la souris (le navigateur sort seul du lock)
+    if (player.locked) player.unlock();
+  });
+  // sans quoi le menu contextuel du navigateur s'ouvre au relâché du bouton
+  canvas.addEventListener("contextmenu", (e) => { if (active) e.preventDefault(); });
 
   /* -------------------------------------------------------- clavier */
 
@@ -700,7 +728,7 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
     for (const a of Object.values(camActors)) a.setEnabled(true);
     $("editHud").hidden = false;
     updateHud();
-    ui.toast("MODE ÉDITEUR — clic pour sélectionner");
+    ui.toast("MODE ÉDITEUR — clic : sélectionner ; clic droit maintenu : regarder");
   }
 
   function exit() {
@@ -729,7 +757,7 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
   async function save() {
     // poses de figurants retouchées au mode pose (voir pose.js)
     const nPoses = poseMode ? poseMode.collect(layout) : 0;
-    if (nPoses) ui.toast(nPoses + " pose(s) de figurant écrite(s) dans le plan");
+    if (nPoses) ui.toast(nPoses + " retouche(s) de figurant (pose, placement) écrite(s) dans le plan");
     for (const m of touched) {
       if (!m.isDisposed()) layout.overrides[idOf(m)] = snapshot(m);
     }

@@ -13,6 +13,7 @@
 import { V3, C3, pbr, gold, canvasTex, rnd, rndInt, pick, animVec, fmt } from "./util.js";
 import { LAYOUT } from "./world.js";
 import { CHIP_H, CHIP_R } from "./chips.js";
+import { buildShoe } from "./shoe.js";
 const B = BABYLON;
 
 const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
@@ -220,19 +221,16 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
   }
 
   /* ---------------- sabot, corbeille, rack du croupier ---------------- */
-  const shoePos = V3(-0.95, TOP_Y + 0.005, -0.62);
-  const shoe = new B.TransformNode("shoe", scene);
-  shoe.parent = root; shoe.position = shoePos.clone(); shoe.rotation.y = 0.5;
+  // Le sabot (à la gauche du croupier) et la corbeille de défausse (à sa
+  // droite) sont tous deux orientés vers l'intérieur du tapis : la carte sort
+  // par la langue de laiton EN DIRECTION des places, et la pile de défausse se
+  // lit depuis le siège au lieu de se cacher derrière une paroi.
+  const stock = buildShoe(scene, world, root, cards, {
+    shoe: { pos: V3(-0.95, TOP_Y, -0.62), yaw: 0.82 },
+    tray: { pos: V3(0.95, TOP_Y, -0.62), yaw: -1.0 },
+  });
+  const shoeExit = stock.exit;
   const shoeMat = pbr("shoeM", scene, { color: C3(0.09, 0.07, 0.06), roughness: 0.35, metallic: 0.2 });
-  const sBody = B.MeshBuilder.CreateBox("sb", { width: 0.14, height: 0.13, depth: 0.24 }, scene);
-  sBody.parent = shoe; sBody.position.y = 0.065; sBody.material = shoeMat;
-  const sRamp = B.MeshBuilder.CreateBox("sr", { width: 0.14, height: 0.02, depth: 0.2 }, scene);
-  sRamp.parent = shoe; sRamp.position.set(0, 0.055, 0.2); sRamp.rotation.x = 0.35; sRamp.material = shoeMat;
-  world.shadowGens.forEach(sg => sg.addShadowCaster(sBody));
-  const shoeExit = V3(shoePos.x, TOP_Y + 0.06, shoePos.z + 0.24);
-
-  const discard = B.MeshBuilder.CreateBox("discard", { width: 0.13, height: 0.1, depth: 0.2 }, scene);
-  discard.parent = root; discard.position.set(0.95, TOP_Y + 0.05, -0.62); discard.material = shoeMat;
 
   // rack de jetons du croupier (décor)
   const rack = B.MeshBuilder.CreateBox("rack", { width: 0.66, height: 0.06, depth: 0.2 }, scene);
@@ -555,8 +553,11 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     // ferait glisser vers la défausse au milieu de sa combustion
     G.tableCards.filter((c) => !c._burning && !c.body.isDisposed()).forEach((c) => {
       c._animated();
-      animVec(scene, c.body, "position", c.body.position, toWorld(V3(0.95, TOP_Y + 0.12, -0.62)), 20,
-        undefined, () => c.dispose());
+      // Cible RECALCULÉE par carte : `mouth()` suit le haut de la pile, si bien
+      // que la corbeille se remplit carte après carte au lieu de les recevoir
+      // toutes au même point. Le compteur ne monte qu'à l'arrivée.
+      animVec(scene, c.body, "position", c.body.position, toWorld(stock.mouth()), 20,
+        undefined, () => { c.dispose(); stock.discard(1); });
     });
     G.tableCards = [];
     G.hand = []; G.dealerHand = [];
@@ -570,6 +571,7 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     // qu'en repli, quand aucune table distante n'est branchée.
     if (shoeCards.length < 40) newShoe();
     const cd = opt.card || shoeCards.pop();
+    stock.deal(1);            // le paquet visible recule d'une carte
     const start = toWorld(shoeExit);
     const c = cards.create(cd.rank, cd.suit, start, false);
     // La cible vit SUR la carte : une carte qui arrive resserre l'éventail
@@ -1621,6 +1623,7 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
         }
       } else if (ev.t === "shuffle") {
         audio.shuffle(tableVol());
+        stock.refill();       // sabot rechargé, corbeille vidée
       }
       } catch (e) {
         // un évènement qui casse ne doit JAMAIS geler la table : on le jette
@@ -1632,6 +1635,11 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
     }
     if (state) {
       G.phase = state.phase;
+      // Niveau du sabot : le paquet visible se recale sur le compte du serveur.
+      // `stock.deal()` réagit au lancer de chaque carte, mais toutes celles que
+      // le serveur tire n'apparaissent pas à l'écran — sans ce recalage, le
+      // paquet dérivait d'un bon tiers et la carte de coupe ne sortait jamais.
+      stock.sync(state.shoeLeft);
       // Ma place est celle que le serveur associe à mon identifiant réseau, pas
       // celle que je crois occuper : lui seul fait foi.
       const me = state.seats.find((s) => s.pid && s.pid === myNetId) || null;

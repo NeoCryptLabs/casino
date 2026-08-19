@@ -76,6 +76,12 @@ export class Net {
     // n'additionne rien de son côté, il affiche ce qu'on lui annonce.
     this.onProfile = o.onProfile || (() => { });
     this.onWallet = o.onWallet || (() => { });
+    // (Re)connexion établie. Tout ce que le serveur tient EN SÉANCE — la
+    // chaise de blackjack, d'abord — est perdu à sa mort ou à une coupure :
+    // ce crochet permet à main.js de re-déclarer l'état que le client croit
+    // encore avoir. Sans lui, un serveur relancé laissait le joueur assis
+    // dans le vide : mises, C et ENCAISSER partaient à une place jamais prise.
+    this.onReconnect = o.onReconnect || (() => { });
     // Le plan des places, à enseigner au serveur : lui seul décidera où
     // reposer un joueur, y compris un joueur parti sans un mot.
     this.spotMap = o.spotMap || null;
@@ -131,6 +137,8 @@ export class Net {
       // que le joueur ne puisse s'asseoir puis disparaître — c'est justement
       // pour le cas où plus personne n'est là pour parler qu'il existe.
       this._sendSpots();
+      // ...et l'état de séance (chaise de table) : voir onReconnect.
+      try { this.onReconnect(); } catch (e) { console.warn("[net] re-déclaration en échec", e); }
       console.info("[net] connecté");
     };
     ws.onmessage = (ev) => {

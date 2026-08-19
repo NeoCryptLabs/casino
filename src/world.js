@@ -149,10 +149,15 @@ export function buildWorld(scene) {
   amb.intensity = 0.62;
   amb.diffuse = C3(1, 0.78, 0.52);
   amb.groundColor = C3(0.25, 0.1, 0.08);
+  // le spéculaire par défaut est BLANC : l'ambiante posait un voile brillant
+  // sur tout le sol — elle n'est là que pour remplir les ombres
+  amb.specular = C3(0, 0, 0);
 
   function spot(name, pos, dir, angle, intens, color, range = 30, shadows = true) {
     const s = new B.SpotLight(name, pos, dir, angle, 6, scene);
-    s.intensity = intens; s.diffuse = color; s.specular = color; s.range = range;
+    // spéculaire réduit : à pleine couleur, CHAQUE spot posait son reflet dur
+    // sur le sol et les dorures — on garde un glint discret, pas une galaxie
+    s.intensity = intens; s.diffuse = color; s.specular = color.scale(0.35); s.range = range;
     if (shadows) {
       // Windows retrouve l'image du Mac depuis le correctif des blocs
       // uniformes (cf. lightBudget) — seuls les GPU de téléphone gardent des
@@ -235,7 +240,8 @@ export function buildWorld(scene) {
   // étirait les veines en traînées de 17 m.
   const lightMarble = marbleTexture(scene, true);      // plaza + piliers
   const floorMarble = marbleTexture(scene, true, "marbleFloor", 13, 10);
-  const floorMat = pbr("floorM", scene, { color: C3(0.36, 0.29, 0.22), metallic: 0.05, roughness: 0.22 });
+  // roughness relevée : à 0,22 le sol était un miroir de toutes les lampes
+  const floorMat = pbr("floorM", scene, { color: C3(0.36, 0.29, 0.22), metallic: 0, roughness: 0.45 });
   floorMat.baseTexture = floorMarble;
   floor.material = floorMat;
   floor.receiveShadows = true;
@@ -250,7 +256,7 @@ export function buildWorld(scene) {
   carpetMat.normalTexture = carpetN;
 
   // Disque de marbre autour de la fontaine + allée
-  const marbleMat = pbr("marbleM", scene, { color: C3(0.62, 0.59, 0.54), metallic: 0.06, roughness: 0.16 });
+  const marbleMat = pbr("marbleM", scene, { color: C3(0.62, 0.59, 0.54), metallic: 0, roughness: 0.38 });
   marbleMat.baseTexture = lightMarble;
   marbleMat.backFaceCulling = false;
   const plaza = B.MeshBuilder.CreateDisc("plaza", { radius: 8.4, tessellation: 96 }, scene);
@@ -335,7 +341,13 @@ export function buildWorld(scene) {
       coffers.push(c);
     }
   }
-  if (coffers.length) { const cm = merge(coffers, "coffers"); cm.material = gold(scene, 0.5); statics.push(cm); }
+  // OR MAT dédié : en gold() poli (metallic 1, roughness 0,19), la grille de
+  // caissons reflétait chaque lampe de la salle — un ciel étoilé au plafond
+  if (coffers.length) {
+    const cm = merge(coffers, "coffers");
+    cm.material = pbr("cofM", scene, { color: C3(0.43, 0.33, 0.14), metallic: 0.85, roughness: 0.55 });
+    statics.push(cm);
+  }
 
   // verrière au-dessus de la fontaine
   const dome = B.MeshBuilder.CreateSphere("dome", { diameter: 13, slice: 0.5, segments: 28 }, scene);
@@ -348,7 +360,7 @@ export function buildWorld(scene) {
   statics.push(dome, ceil);
 
   /* ---------- piliers ---------- */
-  const colMat = pbr("colM", scene, { color: C3(1, 1, 1), roughness: 0.24, metallic: 0.05 });
+  const colMat = pbr("colM", scene, { color: C3(1, 1, 1), roughness: 0.42, metallic: 0 });
   colMat.baseTexture = lightMarble;
   const capMat = gold(scene, 0.9);
   // les huit colonnes du handoff (x en miroir) : (11, ∓6), (−19, ∓6), (∓9, −12), (∓9, 13)
@@ -491,7 +503,7 @@ export function buildWorld(scene) {
   statics.push(redCarpet);
   // incrustation d'axe en marbre clair, du tapis jusqu'au bar (3,4 × 22 à z 2).
   // Texture à l'aspect de la bande (1:6,5), sinon les veines filent en stries.
-  const axisMat = pbr("axisM", scene, { color: C3(0.62, 0.59, 0.54), metallic: 0.06, roughness: 0.16 });
+  const axisMat = pbr("axisM", scene, { color: C3(0.62, 0.59, 0.54), metallic: 0, roughness: 0.38 });
   axisMat.baseTexture = marbleTexture(scene, true, "marbleAxis", 1.6, 10);
   const axis = B.MeshBuilder.CreateGround("axisInlay", { width: 3.4, height: 22 }, scene);
   axis.position = V3(0, 0.014, 2.0);
