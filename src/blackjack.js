@@ -257,8 +257,11 @@ export function buildBlackjack(scene, world, audio, chips, cards, ui, state_, pe
   for (const i of [0]) {
     const s = SEATS[i];
     const w = toWorld(s.chair);
-    const n = people.spawn(V3(w.x, 0, w.z), root.rotation.y + s.a + Math.PI,
-      { seated: true, seatY: 0.79, height: rnd(1.76, 1.88), sex: i % 2 ? "m" : "f" });
+    // s.a place la chaise sur l'arc ; PAS de +π ici : ce demi-tour compensait
+    // en douce l'orientation inversée des kits Ready Player Me, normalisée
+    // depuis dans People.load (kit.flip). Yaw en convention -Z, comme partout.
+    const n = people.spawn(V3(w.x, 0, w.z), root.rotation.y + s.a,
+      { seated: true, seatY: 0.79, height: rnd(1.76, 1.88), sex: i % 2 ? "m" : "f", poseId: "bj-place" + i });
     npcs.push({ npc: n, seat: s, hand: [], bet: 0, betChips: [], stack: [], done: false, cash: rndInt(600, 4000) });
   }
 

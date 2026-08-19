@@ -15,6 +15,7 @@
 import { V3, C3 } from "./util.js";
 import { LAYOUT } from "./world.js";
 import { meshIds, snapshot, saveLayout } from "./layout.js";
+import { createPoseMode } from "./pose.js";
 const B = BABYLON;
 
 // meshes qui n'appartiennent pas au décor : cartes et jetons vivent leur vie,
@@ -71,12 +72,13 @@ const ANCHOR_DEFS = [
   { key: "micLow", color: C3(0.55, 0.4, 1), at: (L) => L.micLow.clone(), put: (p) => [p.x, p.y, p.z] },
 ];
 
-export function createEditor({ scene, canvas, player, state, ui, audio, layout, world, bootClones, camActors = {} }) {
+export function createEditor({ scene, canvas, player, state, ui, audio, layout, world, bootClones, camActors = {}, people = null }) {
   let net = null;                  // liaison serveur, posée par main.js (bind)
   const $ = (id) => document.getElementById(id);
   let active = false;
   let selected = null;
   let gm = null, hl = null;
+  let poseMode = null;             // le rayon figurants (pose.js), créé au 1er F2
   const touched = new Set();          // meshes modifiés, à photographier au save
   const markers = new Map();          // sphère d'ancre -> définition
   // objets AJOUTÉS (Ctrl+D), les miens et ceux des sessions passées
@@ -86,8 +88,18 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
 
   /* -------------------------------------------------------- outillage */
 
+  /** Le NPC (npc.js) dont ce mesh fait partie, ou null. */
+  function npcFor(mesh) {
+    if (!people) return null;
+    for (let n = mesh; n; n = n.parent) {
+      if (n.name === "npc") return people.list.find((p) => p.root === n) || null;
+    }
+    return null;
+  }
+
   function ensureTools() {
     if (gm) return;
+    poseMode = createPoseMode({ scene, player, ui, audio, people });
     // `camera` : le halo de sélection ne se dessine que dans la vue de
     // l'éditeur — sinon il bave dans la vignette d'aperçu, qui doit montrer
     // l'image de la caméra de table et rien d'autre.
@@ -154,6 +166,9 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
   function onMoved() {
     if (!selected) return;
     dirty = true;
+    // les cartes d'ombre du décor peuvent être figées (RENDER_ONCE) : un
+    // objet déplacé doit y reporter son ombre
+    world.refreshShadows?.();
     const def = markers.get(selected);
     if (def) {
       layout.anchors[def.key] = def.put(selected.position);
@@ -177,6 +192,9 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
       try { hl.removeMesh(selected); } catch { }
     }
     selected = mesh;
+    // le décor est gelé (freezeWorldMatrix) : ce qu'on attrape doit redevenir
+    // mobile, sinon le gizmo tire dans le vide
+    if (mesh) mesh.unfreezeWorldMatrix?.();
     gm.attachToMesh(mesh);
     if (mesh) {
       // point de départ du suivi en direct (voir tick) pour les ancres
@@ -520,6 +538,17 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
 
   scene.onPointerObservable.add((info) => {
     if (!active || info.type !== B.PointerEventTypes.POINTERTAP) return;
+    // mode pose : les clics lui appartiennent (pastilles d'os, changement de
+    // figurant, sortie) tant qu'il est actif
+    if (poseMode && poseMode.active) { poseMode.tap(npcFor); return; }
+    // un figurant cliqué ouvre le mode pose — les meshes skinnés sont exclus
+    // du pick « décor » juste en dessous, il leur faut leur propre passe
+    const hitNpc = scene.pick(scene.pointerX, scene.pointerY, (m) =>
+      m.isEnabled() && m.isPickable !== false && !!npcFor(m));
+    if (hitNpc && hitNpc.hit) {
+      const p = npcFor(hitNpc.pickedMesh);
+      if (p) { select(null); poseMode.enter(p); return; }
+    }
     const hit = scene.pick(scene.pointerX, scene.pointerY, (m) =>
       m.isEnabled() && m.isVisible && m.isPickable !== false &&
       !m.skeleton && !BLOCKED.test(m.name));
@@ -558,6 +587,12 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
       return;
     }
     if (!active) return;
+
+    // mode pose : R restaure, Échap remonte d'un cran — avant tout le reste
+    if (poseMode && poseMode.active) {
+      if (e.code === "KeyR") { e.preventDefault(); poseMode.reset(); return; }
+      if (e.code === "Escape") { poseMode.escape(); updateHud(); return; }
+    }
 
     if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") {
       e.preventDefault();
@@ -670,6 +705,7 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
 
   function exit() {
     active = false;
+    if (poseMode) poseMode.exit();
     select(null);
     setMarkers(false);
     if (quad && quad.on) toggleQuad();     // on ne joue pas en vue scindée
@@ -691,6 +727,9 @@ export function createEditor({ scene, canvas, player, state, ui, audio, layout, 
   /* -------------------------------------------------------- sauvegarde */
 
   async function save() {
+    // poses de figurants retouchées au mode pose (voir pose.js)
+    const nPoses = poseMode ? poseMode.collect(layout) : 0;
+    if (nPoses) ui.toast(nPoses + " pose(s) de figurant écrite(s) dans le plan");
     for (const m of touched) {
       if (!m.isDisposed()) layout.overrides[idOf(m)] = snapshot(m);
     }

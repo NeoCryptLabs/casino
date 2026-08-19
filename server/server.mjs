@@ -144,6 +144,8 @@ async function handleLayout(req, res) {
         overrides: j.overrides && typeof j.overrides === "object" ? j.overrides : {},
         clones: Array.isArray(j.clones) ? j.clones : [],
         cameras: j.cameras && typeof j.cameras === "object" ? j.cameras : {},
+        // poses de figurants (mode pose de l'éditeur, voir src/pose.js)
+        poses: j.poses && typeof j.poses === "object" ? j.poses : {},
       };
       await writeFile(LAYOUT_FILE, JSON.stringify(clean, null, 2) + "\n");
       res.writeHead(200, { "content-type": "application/json" });

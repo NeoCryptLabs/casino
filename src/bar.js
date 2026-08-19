@@ -220,8 +220,8 @@ export async function buildBar(scene, world, audio, people) {
     { sex: "m", uniform: true, role: "bar", height: 1.78 });
   const faceBar = (s) => Math.atan2(BX - s.x, BZ - s.z) + Math.PI;
   const patrons = [
-    people.spawn(stools[0].clone(), faceBar(stools[0]) + 0.06, { seated: true, seatY: 0.84, height: 1.82, sex: "m" }),
-    people.spawn(stools[4].clone(), faceBar(stools[4]) - 0.1, { seated: true, seatY: 0.84, height: 1.76 }),
+    people.spawn(stools[0].clone(), faceBar(stools[0]) + 0.06, { seated: true, seatY: 0.84, height: 1.82, sex: "m", poseId: "bar-tabouret0" }),
+    people.spawn(stools[4].clone(), faceBar(stools[4]) - 0.1, { seated: true, seatY: 0.84, height: 1.76, poseId: "bar-tabouret1" }),
   ];
 
   /* ------------------------------ zone d'interaction ----------------------- */

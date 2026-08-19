@@ -24,7 +24,7 @@ const B = () => BABYLON;   // accès paresseux : les fonctions pures n'y touchen
 
 /* ------------------------------------------------------------------ réseau */
 
-const EMPTY = () => ({ anchors: {}, overrides: {}, clones: [], cameras: {} });
+const EMPTY = () => ({ anchors: {}, overrides: {}, clones: [], cameras: {}, poses: {} });
 
 export async function fetchLayout() {
   try {
@@ -37,6 +37,8 @@ export async function fetchLayout() {
       clones: Array.isArray(j.clones) ? j.clones : [],
       // acteurs-caméras posés dans le monde (vue de table…) — voir main.js
       cameras: j.cameras && typeof j.cameras === "object" ? j.cameras : {},
+      // poses de figurants (mode pose de l'éditeur) — voir pose.js / npc.js
+      poses: j.poses && typeof j.poses === "object" ? j.poses : {},
     };
   } catch {
     // pas de serveur (jeu ouvert en statique) : on joue avec le plan par défaut
@@ -105,6 +107,7 @@ export function applyOverrides(scene, overrides) {
   for (const [m, id] of meshIds(scene)) {
     const o = overrides[id];
     if (!o) continue;
+    m.unfreezeWorldMatrix?.();   // le décor est gelé : la surcharge doit prendre
     if (Array.isArray(o.p)) m.position.set(o.p[0], o.p[1], o.p[2]);
     if (Array.isArray(o.r)) { m.rotationQuaternion = null; m.rotation.set(o.r[0], o.r[1], o.r[2]); }
     if (Array.isArray(o.s)) m.scaling.set(o.s[0], o.s[1], o.s[2]);
@@ -148,6 +151,7 @@ export function applyClones(scene, clones, shadowGen) {
     if (!src || !Array.isArray(cl.p)) continue;
     const c = src.clone(src.name + "_c");
     if (!c) continue;
+    c.unfreezeWorldMatrix?.();   // le clone d'un mesh gelé hérite du gel
     c.position.set(cl.p[0], cl.p[1], cl.p[2]);
     if (Array.isArray(cl.r)) { c.rotationQuaternion = null; c.rotation.set(cl.r[0], cl.r[1], cl.r[2]); }
     if (Array.isArray(cl.s)) c.scaling.set(cl.s[0], cl.s[1], cl.s[2]);

@@ -29,6 +29,10 @@ const TINTS = [
 ];
 const UNIFORM_TINT = C3(0.42, 0.4, 0.44);
 
+// Les os qu'une POSE sauvée (mode pose de l'éditeur, voir pose.js) capture et
+// rejoue. Volontairement large : doigts compris — c'est là que ça pèche.
+const BONE_RX = /(Hips|Spine\d*|Neck|Head|(Left|Right)(Shoulder|Arm|ForeArm|Hand((Thumb|Index|Middle|Ring|Pinky)\d)?|UpLeg|Leg|Foot|ToeBase))$/;
+
 // Verrou sur les clips squelettiques : voir NPC.play()
 const CLIPS_DISABLED = false;
 
@@ -171,7 +175,7 @@ async function tryLoad(scene, url) {
 }
 
 export class People {
-  static async load(scene, world) {
+  static async load(scene, world, poses = {}) {
     const kits = [];
     // TOUT PART EN MÊME TEMPS. Chargés l'un après l'autre, ces huit .glb
     // (~45 Mo) additionnaient leurs allers-retours réseau — pour un joueur
@@ -192,6 +196,13 @@ export class People {
     OPTIONAL.forEach((url, i) => {
       if (opts[i]) kits.push({ url, container: opts[i], male: IS_MALE.test(url) });
     });
+    // DEUX CONVENTIONS D'AVANT cohabitent dans les .glb : Michelle et les
+    // modèles Rodin regardent vers -Z à yaw 0 (la convention du code), les
+    // avatars Ready Player Me (mesh « Wolf3D_* ») vers +Z. Sans ce demi-tour
+    // par kit, un client RPM assis au bar tournait le dos au comptoir.
+    for (const k of kits) {
+      if (k.container.meshes?.some((m) => /wolf3d/i.test(m.name))) k.flip = Math.PI;
+    }
     // Michelle ne sert plus que de filet : dès qu'un figurant dédié est présent
     // dans assets/, elle disparaît de la salle. Elle reste chargée — son
     // matériau nourrit la tenue de service (_prepareUniform) et elle rattrape
@@ -226,6 +237,7 @@ export class People {
       });
     }
     const people = new People(scene, world, kits);
+    people.poses = poses || {};
     await people._prepareUniform();
     return people;
   }
@@ -296,11 +308,16 @@ export class People {
     // sur le premier figurant venu : sinon `sex: "f"` serait perdu en route et
     // la préposée deviendrait un homme le jour où un male.glb est déposé.
     const staffKits = o.role ? this.kits.filter((k) => k.staff === o.role) : [];
+    // Tenue de service sans modèle dédié (vestiaire) : SEULE Michelle sait la
+    // porter — uniformMat et l'habillage procédural sont calibrés sur SON
+    // atlas. Plaqués sur un figurant dédié (UVs Wolf3D), ils rendaient la
+    // préposée en silhouette camouflage noire, méconnaissable.
     const pool = o.singer
       ? this.kits.filter((k) => k.singer)
       : o.avatar
         ? this.kits.filter((k) => k.avatar)
-        : staffKits.length ? staffKits : bySex();
+        : staffKits.length ? staffKits
+          : o.uniform ? [this.kits[0]] : bySex();
     const kit = pick(pool.length ? pool : this.kits.filter(extra));
     const ent = kit.container.instantiateModelsToScene((n) => n, true, { doNotInstantiate: true });
     const model = ent.rootNodes[0];
@@ -310,7 +327,7 @@ export class People {
     // l'envers — on l'encapsule dans notre propre nœud d'orientation.
     const root = new B.TransformNode("npc", scene);
     root.position.copyFrom(pos);
-    root.rotation.y = faceY;
+    root.rotation.y = faceY + (kit.flip || 0);
     model.parent = root;
 
     const height = o.height ?? (kit.staff ? STAFF[kit.staff].height : rnd(1.57, 1.81));
@@ -326,9 +343,12 @@ export class People {
     for (const m of model.getChildMeshes()) {
       m.receiveShadows = true;
       if (this.world.shadowGens[0]) this.world.shadowGens[0].addShadowCaster(m);
-      // le personnel procédural est déjà habillé : ni recoloration d'uniforme
-      // (elle est calibrée sur l'atlas du modèle importé) ni teinte aléatoire
-      if (kit.staff || kit.avatar || kit.singer) continue;
+      // Seule Michelle (kit de repli) se teinte ou s'habille : sa robe est un
+      // atlas neutre prévu pour ça. Les figurants dédiés (male, male2,
+      // female2…) arrivent avec leur tenue et leur peau CUITES dans la
+      // texture — multiplier tout ça par une teinte donnait des clients au
+      // visage gris-bleu de noyé.
+      if (!kit.fallback) continue;
       if (o.uniform && this.uniformMat) { m.material = this.uniformMat; continue; }
       const mat = m.material;
       if (!mat) continue;
@@ -349,6 +369,7 @@ export class People {
     ent.animationGroups.filter((a) => a !== rest).forEach((a) => a.stop());
 
     const npc = new NPC(this, root, model, ent, o, height);
+    npc.flip = kit.flip || 0;
     npc._lowerArms();
     // posture de métier, prise APRÈS la descente des bras : elle sert de base
     // aux micro-animations de `_pose`
@@ -362,6 +383,13 @@ export class People {
       npc._outfit(faceY, o.role || "dealer");
     }
     if (o.seated) npc._sit(o.seatY ?? pos.y);
+    // Identité de pose (mode pose de l'éditeur) : le POSTE d'abord — un
+    // `poseId` explicite, sinon le rôle, sinon « client assis/debout » — puis
+    // le MODÈLE, parce qu'une pose est écrite dans le repère de SON rig.
+    const kitBase = (kit.url || "").split("/").pop() || "?";
+    npc.poseKey = (o.poseId || o.role || ("client:" + (o.seated ? "assis" : "debout"))) + "@" + kitBase;
+    const saved = this.poses && this.poses[npc.poseKey];
+    if (saved) npc.applyPose(saved);
     this.list.push(npc);
     return npc;
   }
@@ -407,6 +435,41 @@ class NPC {
     this.lFore = this.node("LeftForeArm");
     this.stance = opts.role || null;      // 'dealer' | 'bar' : posture de métier
     this._base = new Map();
+    this._sync();
+    this._snapshot();
+  }
+
+  /** Les os posables : les TransformNodes du squelette qui portent la pose. */
+  poseBones() {
+    return this._nodes.filter((n) => BONE_RX.test(n.name));
+  }
+
+  /** Photographie la pose courante (quaternions locaux, os par os). */
+  capturePose() {
+    const bones = {};
+    for (const nd of this.poseBones()) {
+      const key = nd.name.includes(":") ? nd.name.split(":").pop() : nd.name;
+      const q = nd.rotationQuaternion
+        || B.Quaternion.FromEulerVector(nd.rotation || B.Vector3.Zero());
+      bones[key] = [+q.x.toFixed(5), +q.y.toFixed(5), +q.z.toFixed(5), +q.w.toFixed(5)];
+    }
+    return { bones };
+  }
+
+  /**
+   * Rejoue une pose sauvée PAR-DESSUS la posture calculée, puis rebase les
+   * micro-animations (_snapshot) : la respiration continue autour d'elle.
+   * Les clés sont des noms d'os SANS préfixe de rig (« RightForeArm ») : on
+   * résout exact d'abord, puis par suffixe — les rigs préfixent différemment.
+   */
+  applyPose(pose) {
+    for (const [key, q] of Object.entries(pose.bones || {})) {
+      const nd = this._nodes.find((n) => n.name === key)
+        || this._nodes.find((n) => n.name.endsWith(":" + key))
+        || this._nodes.find((n) => n.name.endsWith(key));
+      if (!nd) continue;
+      nd.rotationQuaternion = new B.Quaternion(q[0], q[1], q[2], q[3]);
+    }
     this._sync();
     this._snapshot();
   }
@@ -469,19 +532,24 @@ class NPC {
       const fore = this.node(side + "ForeArm");
       const hand = this.node(side + "Hand");
       if (!arm || !fore || !hand) continue;
-      // coude : légèrement en arrière, resserré contre le buste
+      // MAINS DEVANT, jointes au niveau de la boucle de ceinture — la posture
+      // d'attente côté joueurs (demandée : on voyait surtout le croupier de
+      // FACE, les mains dans le dos le faisaient paraître raide et manchot).
+      // Coude : contre le buste, à peine en avant — c'est l'avant-bras qui
+      // fait tout le chemin vers l'avant.
       this._aim(arm, fore, h
-        .add(right.scale(s * 0.165 * S))
-        .add(fwd.scale(-0.09 * S))
-        .add(new B.Vector3(0, 0.12 * S, 0)));
-      // Main : la cible passe DE L'AUTRE CÔTÉ de l'axe du corps. `_aim` ne fait
-      // que pointer l'os vers la cible — la main s'arrête à la longueur de
-      // l'avant-bras, bien avant. Viser le milieu laissait 18 cm entre les deux
-      // mains ; viser au-delà les amène au contact, poignets croisés.
+        .add(right.scale(s * 0.15 * S))
+        .add(fwd.scale(0.02 * S))
+        .add(new B.Vector3(0, 0.10 * S, 0)));
+      // Main : cible à peine de l'autre côté de l'axe, devant le ventre.
+      // `_aim` ne fait que pointer l'os — la main s'arrête à la longueur de
+      // l'avant-bras, donc viser légèrement croisé pose les mains l'une sur
+      // l'autre sans les interpénétrer (leçon de la version « dans le dos »).
+      // Le réglage fin se fait au mode pose (F2 -> clic figurant).
       this._aim(fore, hand, h
-        .add(right.scale(s * -0.10 * S))
-        .add(fwd.scale(-0.17 * S))
-        .add(new B.Vector3(0, 0.06 * S, 0)));
+        .add(right.scale(s * -0.03 * S))
+        .add(fwd.scale(0.20 * S))
+        .add(new B.Vector3(0, 0.07 * S, 0)));
     }
     this._snapshot();
   }
@@ -843,7 +911,9 @@ class NPC {
     let ry = Math.sin(t * 0.37 + 1.2) * 0.2 + Math.sin(t * 0.11) * 0.14;
     if (this.lookAt) {
       const d = this.lookAt.subtract(this.root.position);
-      const want = Math.atan2(d.x, d.z) - this.root.rotation.y;
+      // this.flip : demi-tour de normalisation du kit (voir People.load) — le
+      // yaw LOGIQUE du personnage reste rotation.y - flip
+      const want = Math.atan2(d.x, d.z) - this.root.rotation.y + (this.flip || 0);
       ry = clamp(want, -0.9, 0.9) * 0.55 + ry * 0.45;
     }
     apply(this.head, Math.sin(t * 0.8) * 0.05, ry, Math.sin(t * 0.6) * 0.03);

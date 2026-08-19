@@ -275,7 +275,7 @@ function buildCashier(scene, world, M, people) {
   // +0,15, où le plateau lui traversait la taille. `counterY` remonte ses mains
   // pour qu'elles se posent SUR le marbre et non dedans.
   const npc = people ? people.spawn(V3(P.x, 0, P.z + 0.36), 0,
-    { sex: "m", uniform: true, role: "bar", height: 1.76, counterY: 1.13 }) : null;
+    { sex: "m", uniform: true, role: "bar", height: 1.76, counterY: 1.13, poseId: "caissier" }) : null;
 
   // zone E devant le guichet central : l'achat de jetons (cashier.js)
   const hit = B.MeshBuilder.CreateBox("cashHit", { width: 3.0, height: 2, depth: 1.6 }, scene);
