@@ -54,9 +54,31 @@ const state = {
 
 /* --------------------------------------------------------------- chargement */
 
+/**
+ * ANTI-BOUCLE DE PLANTAGE (PWA mobile, surtout). Quand la page meurt pendant
+ * le chargement — mémoire ou GPU à genoux — le système la recharge tout seul,
+ * re-plante, et finit par renoncer (« a problem repeatedly occurred » sur
+ * iOS). Aucune erreur JS à attraper : le processus entier disparaît. La seule
+ * trace possible s'écrit À L'AVANCE : « pending » posé au départ, « ok » une
+ * fois le jeu stable. Deux départs sans arrivée d'affilée = MODE ALLÉGÉ
+ * (résolution réduite, sans MSAA ni bloom), et on affiche l'étape fautive —
+ * le téléphone devient son propre diagnostic.
+ */
+const SAFE = (() => {
+  try {
+    let n = Number(localStorage.getItem("mirage.boot.crashes")) || 0;
+    if (localStorage.getItem("mirage.boot") === "pending")
+      localStorage.setItem("mirage.boot.crashes", String(++n));
+    localStorage.setItem("mirage.boot", "pending");
+    return n >= 2;
+  } catch { return false; } // stockage indisponible : tant pis pour le filet
+})();
+
 function setProgress(p, txt) {
   $("loadbar").style.width = p + "%";
   if (txt) $("loadtxt").textContent = txt;
+  // le fil d'Ariane du plantage : la dernière étape écrite est la coupable
+  try { if (txt) localStorage.setItem("mirage.boot.step", txt); } catch { }
 }
 /**
  * UNE FRAME RENDUE — ou, à défaut, un délai.
@@ -80,14 +102,25 @@ const frame = () => new Promise((r) => {
 
 async function boot() {
   const canvas = $("renderCanvas");
+  if (SAFE) {
+    let step = "";
+    try { step = localStorage.getItem("mirage.boot.step") || ""; } catch { }
+    const d = document.createElement("div");
+    d.textContent = "Mode allégé — le chargement avait planté"
+      + (step ? " (à « " + step + " »)" : "");
+    d.style.cssText = "margin-top:10px;font-size:12px;opacity:.7;letter-spacing:.4px";
+    $("loader").appendChild(d);
+    console.warn("[boot] mode allégé après plantage ; dernière étape :", step);
+  }
   const engine = new B.Engine(canvas, true, {
-    stencil: true, antialias: true, powerPreference: "high-performance",
+    stencil: true, antialias: !SAFE, powerPreference: "high-performance",
     preserveDrawingBuffer: false,
   });
   // même plafond que le défaut du réglage « Qualité de rendu » (settings.js) :
   // 1.25 partout (le bridage Windows a sauté avec le correctif des blocs
   // uniformes), 0.75 au tactile — là c'est bien le GPU de téléphone qui plie.
-  engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio || 1, MOBILE ? 0.75 : 1.25));
+  engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio || 1,
+    SAFE ? (MOBILE ? 0.5 : 1) : MOBILE ? 0.75 : 1.25));
   // la carte et le pilote, en clair dans la console ET dans le dump dev :
   // c'est ce qui permet de diagnostiquer « lent chez lui » sans sa machine
   try {
@@ -239,13 +272,13 @@ async function boot() {
 
   // ---- post-traitement ----
   const pipe = new B.DefaultRenderingPipeline("pipe", true, scene, [player.camera]);
-  pipe.samples = MOBILE ? 2 : 4;    // CPU-limité sur bureau ; le ×4 pèse au téléphone
+  pipe.samples = SAFE ? 1 : MOBILE ? 2 : 4;    // CPU-limité sur bureau ; le ×4 pèse au téléphone
   pipe.fxaaEnabled = true;
   // Bloom RETENU. Il était généreux (seuil 0,82 / poids 0,34) et nappait tout
   // ce qui était un peu clair — badges, dorures, reflets du feutre — au point
   // d'éblouir. Seuil relevé et poids divisé par deux : les lustres et les néons
   // rayonnent encore, le reste de l'image ne bave plus.
-  pipe.bloomEnabled = true;
+  pipe.bloomEnabled = !SAFE;
   pipe.bloomThreshold = 0.90;
   pipe.bloomWeight = 0.16;
   pipe.bloomKernel = 96;
@@ -487,6 +520,12 @@ async function boot() {
 
   setProgress(100, "Prêt");
   window.__bootOk = true;          // le filet d'erreur de boot (index.html) se tait
+  setTimeout(() => {
+    try {
+      localStorage.setItem("mirage.boot", "ok");
+      localStorage.removeItem("mirage.boot.crashes");
+    } catch { }
+  }, 15000);
   await frame();
 
   /* ------------------------------------------------------------- boucle */
@@ -1601,6 +1640,13 @@ async function boot() {
   // d'un coup, maintenant que le monde entier existe.
   // `net` : le pseudo persisté part au serveur dès que le registre s'applique
   settings.bind({ engine, scene, player, world, pipe, ssao, audio, heat, net });
+  // …sauf en MODE ALLÉGÉ : les valeurs de survie repassent DERRIÈRE les
+  // réglages sauvés (qui ont pu être justement ceux qui plantaient).
+  if (SAFE) {
+    engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio || 1, MOBILE ? 0.5 : 1));
+    pipe.bloomEnabled = false;
+    pipe.samples = 1;
+  }
 
   /* GEL DU DÉCOR, second étage : les matériaux statiques (salle, fontaine,
    * parc de machines) cessent d'être re-validés par Babylon à chaque frame.
