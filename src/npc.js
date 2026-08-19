@@ -2,23 +2,17 @@
  * Figurants : personnage glTF rigué (rig Mixamo) instancié par personne,
  * posé debout ou assis par manipulation du squelette.
  *
- * Deux modèles sont prévus (`MODELS`). Le modèle masculin est chargé depuis le
- * dossier local `assets/` : déposez-y un `.glb` rigué Mixamo/Ready Player Me et
- * le barman, le croupier et une partie des clients deviennent des hommes, sans
- * toucher au code. À défaut, tout le monde utilise le modèle féminin.
+ * Les clients sont des PANTINS : le même Xbot Mixamo que les joueurs distants
+ * (`assets/player.glb`), teinté par personne pour varier la salle. Les
+ * personnages habillés restent réservés au personnel et à la chanteuse.
  */
 import { V3, C3, rnd, rndInt, pick, clamp, canvasTex, gold } from "./util.js";
 import { buildStaffKit, STAFF } from "./staff.js";
 const B = BABYLON;
 
-// Seul modèle réaliste librement accessible en ligne. Les autres sont
-// optionnels et lus dans assets/ (voir assets/README.md).
+// Michelle : filet de sécurité (si player.glb manque) et support de la tenue
+// de service — son atlas neutre est le seul qui accepte l'habillage procédural.
 const BASE_MODEL = "https://threejs.org/examples/models/gltf/Michelle.glb";
-const OPTIONAL = [
-  "assets/male.glb", "assets/male2.glb",
-  "assets/female2.glb", "assets/female3.glb",
-];
-const IS_MALE = /(^|\/)male\d*\.glb$/i;
 
 // Le modèle de base n'a qu'un matériau (corps + vêtements) : la seule variation
 // possible est une nuance globale.
@@ -177,45 +171,31 @@ async function tryLoad(scene, url) {
 export class People {
   static async load(scene, world, poses = {}) {
     const kits = [];
-    // TOUT PART EN MÊME TEMPS. Chargés l'un après l'autre, ces huit .glb
-    // (~45 Mo) additionnaient leurs allers-retours réseau — pour un joueur
+    // TOUT PART EN MÊME TEMPS. Chargés l'un après l'autre, ces cinq .glb
+    // (~35 Mo) additionnaient leurs allers-retours réseau — pour un joueur
     // distant, c'était l'essentiel du temps passé sur l'écran de chargement.
     // L'ordre des kits, lui, reste celui d'avant : il est reconstruit après.
-    const [base, opts, avatar, avatarF, singer, dealerC, barmanC] = await Promise.all([
+    const [base, avatar, singer, dealerC, barmanC] = await Promise.all([
       B.LoadAssetContainerAsync
         ? B.LoadAssetContainerAsync(BASE_MODEL, scene)
         : B.SceneLoader.LoadAssetContainerAsync("", BASE_MODEL, scene),
-      Promise.all(OPTIONAL.map((url) => tryLoad(scene, url))),
       tryLoad(scene, "assets/player.glb"),
-      tryLoad(scene, "assets/player_f.glb"),
       tryLoad(scene, "assets/singer.glb"),
       tryLoad(scene, "assets/dealer.glb"),
       tryLoad(scene, "assets/barman.glb"),
     ]);
     kits.push({ url: BASE_MODEL, container: base, male: false, fallback: true });
-    OPTIONAL.forEach((url, i) => {
-      if (opts[i]) kits.push({ url, container: opts[i], male: IS_MALE.test(url) });
-    });
-    // DEUX CONVENTIONS D'AVANT cohabitent dans les .glb : Michelle et les
-    // modèles Rodin regardent vers -Z à yaw 0 (la convention du code), les
-    // avatars Ready Player Me (mesh « Wolf3D_* ») vers +Z. Sans ce demi-tour
-    // par kit, un client RPM assis au bar tournait le dos au comptoir.
-    for (const k of kits) {
-      if (k.container.meshes?.some((m) => /wolf3d/i.test(m.name))) k.flip = Math.PI;
-    }
-    // Michelle ne sert plus que de filet : dès qu'un figurant dédié est présent
-    // dans assets/, elle disparaît de la salle. Elle reste chargée — son
-    // matériau nourrit la tenue de service (_prepareUniform) et elle rattrape
-    // un déploiement où tous les .glb optionnels manqueraient.
-    if (kits.length > 1) kits[0].hidden = true;
-    // Avatar des joueurs distants : modèle dédié, porteur des clips idle/walk/sit.
-    // Sans lui on retombe sur le modèle importé, qui n'a aucune animation.
-    if (avatar) kits.push({ url: "assets/player.glb", container: avatar, male: true, avatar: true });
-    else console.info("[casino] assets/player.glb absent : avatars sans animation");
-    // Avatar féminin : même contrat que player.glb (rig mixamorig + clips
-    // idle/walk). Chaque joueur distant tire l'un des deux kits au sort.
-    if (avatarF) kits.push({ url: "assets/player_f.glb", container: avatarF, male: false, avatar: true });
-    else console.info("[casino] assets/player_f.glb absent : avatars tous masculins");
+    // LE PANTIN sert deux fois : kit `avatar` pour les joueurs distants
+    // (clips idle/walk/sit), kit `tint` pour les clients de la salle — même
+    // conteneur, mais un kit distinct pour que les figurants gardent teinte
+    // et carrure aléatoires. Michelle ne sert plus que de filet : elle reste
+    // chargée — son matériau nourrit la tenue de service (_prepareUniform) —
+    // et elle rattrape un déploiement où player.glb manquerait.
+    if (avatar) {
+      kits.push({ url: "assets/player.glb", container: avatar, male: true, avatar: true });
+      kits.push({ url: "assets/player.glb", container: avatar, male: true, tint: true });
+      kits[0].hidden = true;
+    } else console.info("[casino] assets/player.glb absent : avatars sans animation, clients Michelle");
 
     // LA CHANTEUSE. Modèle dédié, riggé sur le MÊME squelette Mixamo que
     // `player.glb` : elle hérite donc de ses clips `idle`/`walk`. Sans ce
@@ -343,12 +323,13 @@ export class People {
     for (const m of model.getChildMeshes()) {
       m.receiveShadows = true;
       if (this.world.shadowGens[0]) this.world.shadowGens[0].addShadowCaster(m);
-      // Seule Michelle (kit de repli) se teinte ou s'habille : sa robe est un
-      // atlas neutre prévu pour ça. Les figurants dédiés (male, male2,
-      // female2…) arrivent avec leur tenue et leur peau CUITES dans la
-      // texture — multiplier tout ça par une teinte donnait des clients au
-      // visage gris-bleu de noyé.
-      if (!kit.fallback) continue;
+      // Se teintent : Michelle (repli, atlas neutre prévu pour ça) et le
+      // pantin des clients (son gris prend n'importe quelle nuance — c'est ce
+      // qui distingue un figurant d'un joueur distant, resté gris). Les
+      // modèles habillés (personnel, chanteuse) arrivent avec tenue et peau
+      // CUITES dans la texture — les teinter donnait des visages gris-bleu
+      // de noyé.
+      if (!kit.fallback && !kit.tint) continue;
       if (o.uniform && this.uniformMat) { m.material = this.uniformMat; continue; }
       const mat = m.material;
       if (!mat) continue;
@@ -492,6 +473,30 @@ class NPC {
         ? n.rotationQuaternion.clone()
         : B.Quaternion.FromEulerVector(n.rotation || B.Vector3.Zero()));
     }
+  }
+
+  /**
+   * Gèle la micro-animation le temps d'une édition au mode pose : sans ça,
+   * `_pose` réécrit tête/colonne/bras À CHAQUE FRAME depuis `_base`, ce qui
+   * écrase la rotation du gizmo en cours de drag (rien ne bouge avant le
+   * relâchement) et fige un instant de respiration dans chaque `_snapshot`
+   * de fin de drag — la tête dérivait à chaque os retouché.
+   */
+  beginPosing() {
+    this._posing = true;
+    // on rend d'abord aux os micro-animés leur base : l'offset de respiration
+    // de l'instant ne doit pas être photographié dans la pose éditée
+    for (const [nd, q] of this._base) {
+      if (nd.rotationQuaternion) nd.rotationQuaternion.copyFrom(q);
+      else nd.rotationQuaternion = q.clone();
+    }
+    this._sync();
+  }
+
+  endPosing() {
+    this._posing = false;
+    this._sync();
+    this._snapshot();      // la respiration repart autour de la pose finale
   }
 
   /**
@@ -892,6 +897,7 @@ class NPC {
    * cumuler l'offset à chaque frame et le personnage partirait en vrille.
    */
   _pose(dt) {
+    if (this._posing) return;          // en cours d'édition au mode pose
     this._t += dt;
     const t = this._t;
     const live = this.current && this.current.isPlaying;

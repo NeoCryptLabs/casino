@@ -60,6 +60,7 @@ export function createPoseMode({ scene, player, ui, audio, people }) {
   function enter(target) {
     exitBones();
     npc = target;
+    npc.beginPosing();               // fige la respiration : le gizmo agit seul
     initial = npc.capturePose();
     ensureGizmo();
     handleMat();
@@ -107,6 +108,9 @@ export function createPoseMode({ scene, player, ui, audio, people }) {
     if (followObs) { scene.onBeforeRenderObservable.remove(followObs); followObs = null; }
     for (const s of handles) s.dispose();
     handles = [];
+    if (npc && npc.root && !npc.root.isDisposed()) {
+      npc.endPosing();               // la micro-animation repart sur la pose finale
+    }
     npc = null;
     initial = null;
     updateHudHint();

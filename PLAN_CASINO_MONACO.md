@@ -91,6 +91,14 @@ laiton, marbre crème, feutre émeraude, bordeaux).
       l'addon pour d'autres familles. Commit à la demande de l'utilisateur.
 
 ## Journal
+- 19/08 (figurants simplifiés) : « pour les clients, utiliser les pantins de
+  Mixamo (comme joueur), bien plus simple » — les clients de la salle
+  instancient désormais le conteneur de `player.glb` (kit `tint` distinct du
+  kit `avatar` : teinte TINTS et carrure aléatoires par personne, joueurs
+  distants restés gris). `male.glb`/`male2.glb`/`female2.glb` supprimés
+  (historique git), plus aucun HEAD de sonde au boot. Michelle reste le filet
+  et la tenue du vestiaire. Vérifié en headless (playwright du vieux dépôt,
+  scratchpad client*.png) : 6 pantins assis bar/machines, personnel intact.
 - 19/08 (passe de performance — « ça laggue même sur une 4060 ») : le goulot
   n'était pas le GPU mais le CPU (draw calls et travail par frame). Cinq
   chantiers : (1) machines à sous INSTANCIÉES (slots.js, instOf) — ~810 meshes

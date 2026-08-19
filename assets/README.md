@@ -1,34 +1,14 @@
-# Figurants (`male.glb`, `male2.glb`, `female2.glb`, `female3.glb`)
+# Figurants — les clients sont des pantins
 
-Les clients de la salle tirent leur silhouette dans ces fichiers. Dès qu'au
-moins un est présent, la Michelle de three.js (afro, lunettes) ne sert plus que
-de filet de sécurité : elle reste chargée mais n'apparaît plus en salle.
+Les clients de la salle instancient le même pantin Mixamo que les joueurs
+distants (`player.glb`), teinté et calibré (taille, carrure) par personne.
+Aucun fichier dédié à déposer. Les anciens figurants habillés (`male.glb`,
+`male2.glb`, `female2.glb` — Rodin re-habillé et Ready Player Me) restent
+récupérables dans l'historique git.
 
-- `male.glb` — homme en gilet bleu nuit : maillage du barman (Rodin) re-habillé
-  (sortie de `tools/build-avatars.py`).
-- `male2.glb` / `female2.glb` — personnages par défaut de la Ready Player Me
-  Animation Library (github.com/readyplayerme/animation-library, usage
-  personnel/commercial autorisé). Squelette Mixamo sans préfixe — `node()`
-  matche par suffixe, ça suffit. Pas de clips : les figurants sont posés
-  procéduralement, ils n'en ont pas besoin.
-
-Contrat : squelette Mixamo (avec ou sans préfixe `mixamorig:`), T-pose ou
-A-pose, pas d'animation nécessaire.
-
-# Modèle masculin (optionnel)
-
-Déposez ici un fichier **`male.glb`** : un personnage rigué au format glTF
-binaire, squelette Mixamo standard (os `mixamorig:Hips`, `mixamorig:LeftUpLeg`…),
-en T-pose ou A-pose, sans animation nécessaire.
-
-Le jeu le détecte au chargement : le barman, le croupier et la moitié des
-clients de la table deviennent alors des hommes. Sans ce fichier, tout le monde
-utilise le modèle féminin par défaut.
-
-Sources gratuites : [Mixamo](https://www.mixamo.com) (exporter en FBX puis
-convertir en glTF, ou récupérer un .glb tout fait) et
-[Ready Player Me](https://readyplayer.me) (l'URL `https://models.readyplayer.me/<id>.glb`
-donne directement un .glb — enregistrez-le sous `assets/male.glb`).
+La Michelle de three.js (afro, lunettes) ne sert plus que de filet de
+sécurité : elle reste chargée — son atlas neutre nourrit la tenue de service
+(vestiaire) — et elle remplace les clients si `player.glb` manque.
 
 # `singer.glb` — la chanteuse du concert
 
@@ -60,8 +40,8 @@ suffixe Mixamo (`…Hips`, `…LeftArm`, peu importe le préfixe) **et clips
 
 - `player.glb` — LE PANTIN : le Xbot Mixamo d'origine, restauré. Les joueurs
   distants sont des pantins, c'est voulu — les personnages habillés sont
-  réservés aux figurants et au personnel. (L'homme au gilet re-habillé vit
-  désormais en salle : `male.glb`.)
+  réservés au personnel et à la chanteuse. Les clients de la salle instancient
+  le même conteneur, teinté (voir « Figurants » ci-dessus).
 - `player_f.glb` — absent volontairement : tout le monde tirait la variante
   issue de `singer.glb` et la salle se remplissait de sosies de la chanteuse.
 
